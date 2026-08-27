@@ -1,6 +1,14 @@
-# AION Flow — top-level Makefile
+# ================================================================
+#  SPDX-FileCopyrightText:    2026 Filippo Quadri
+#  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
+#  Created:                   2026-08-27 16:19:43
+#  Updated:                   2026-08-27 16:21:32
+#  Description:               AION Flow - Makefile
+# ================================================================
 
-.PHONY: help aion-opt-graph2verilog aion-opt-generate-cells aion-opt-rewrite \
+include scripts/utils.mk
+
+.PHONY: aion-opt-graph2verilog aion-opt-generate-cells aion-opt-rewrite \
         aion-opt-run-all aion-opt-lec aion-opt-sec aion-opt-clean
 
 # ---------------------------------------------------------------------------
@@ -49,29 +57,6 @@ MOD               ?= $(REWRITE_NETLIST) $(CELLS)
 RTL               ?=
 NETLIST           ?= $(RUN_ALL_FLAT)
 LIB               ?=
-
-# ---------------------------------------------------------------------------
-# Help
-# ---------------------------------------------------------------------------
-help: ## Show available targets
-	@echo "AION Flow Makefile"
-	@echo ""
-	@echo "aion_opt targets:"
-	@echo "  make aion-opt-graph2verilog   - Convert input netlist to structural Verilog"
-	@echo "  make aion-opt-generate-cells  - Mine patterns and generate AION cells"
-	@echo "  make aion-opt-rewrite         - Rewrite netlist with generated cells"
-	@echo "  make aion-opt-run-all         - Run full flow end-to-end"
-	@echo "  make aion-opt-lec             - Logical equivalence check"
-	@echo "  make aion-opt-sec             - Sequential equivalence check"
-	@echo "  make aion-opt-clean           - Remove build outputs"
-	@echo ""
-	@echo "Configurable variables:"
-	@echo "  BUILD_DIR, INPUT, TOP, CELL_LIB, MAX_SIZE, MIN_OCCURRENCES, AREA_FACTOR"
-	@echo "  REF, MOD, RTL, NETLIST, LIB"
-	@echo ""
-	@echo "Example:"
-	@echo "  make aion-opt-run-all INPUT=examples/aion_opt/pm32.nl.v TOP=pm32 BUILD_DIR=build/pm32"
-	@echo "  make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml BUILD_DIR=build/pm32"
 
 # ---------------------------------------------------------------------------
 # aion_opt subcommands

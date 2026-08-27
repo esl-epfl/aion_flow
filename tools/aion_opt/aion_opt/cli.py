@@ -474,16 +474,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
     # SEC is optional and requires RTL files; only run if they exist.
     # Use the flat netlist (pure PDK primitives) because some formal tools
     # cannot reason through custom hierarchical AION cells.
-    rtl_dirs = getattr(args, "rtl_dirs", [])
-    rtl_files: list[Path] = []
-    for rtl_dir in rtl_dirs:
-        rtl_dir = Path(rtl_dir)
-        rtl_files.extend(
-            [
-                rtl_dir / f"{circuit.name}.v",
-                rtl_dir / "spm.v",
-            ]
-        )
+    rtl_files = [Path(f) for f in getattr(args, "rtl", [])]
     rtl_existing = [str(p) for p in rtl_files if p.exists()]
     if rtl_existing:
         print("[run-all] Running SEC on flat netlist...")
@@ -636,11 +627,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Area reduction factor for new cells.",
     )
     allp.add_argument(
-        "--rtl-dirs",
-        type=str,
+        "--rtl",
+        type=Path,
         nargs="+",
         default=[],
-        help="Directories to search for RTL files when running SEC.",
+        help="RTL Verilog file(s) to use when running SEC.",
     )
     allp.set_defaults(func=cmd_run_all)
 

@@ -2,7 +2,7 @@
 #  SPDX-FileCopyrightText:    2026 Filippo Quadri
 #  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
 #  Created:                   2026-08-27 16:19:43
-#  Updated:                   2026-08-27 16:21:32
+#  Updated:                   2026-08-27 18:08:09
 #  Description:               AION Flow - Makefile
 # ================================================================
 
@@ -56,7 +56,7 @@ CONFIG            ?=
 # ---------------------------------------------------------------------------
 REF               ?= $(INPUT)
 MOD               ?= $(REWRITE_NETLIST) $(CELLS)
-RTL               ?=
+RTL               ?= examples/aion_opt/pm32.v examples/aion_opt/spm.v
 NETLIST           ?= $(RUN_ALL_FLAT)
 LIB               ?=
 
@@ -104,7 +104,8 @@ aion-opt-run-all: ## Run the full aion_opt flow end-to-end
 ifneq ($(CONFIG),)
 	PYTHONPATH=$(PYTHONPATH) $(AION_OPT) run-all \
 		--config $(CONFIG) \
-		--output-dir $(BUILD_DIR_OPT)
+		--output-dir $(BUILD_DIR_OPT) \
+		--rtl $(RTL)
 else
 	PYTHONPATH=$(PYTHONPATH) $(AION_OPT) run-all \
 		--input $(INPUT) \
@@ -113,7 +114,8 @@ else
 		--output-dir $(BUILD_DIR_OPT) \
 		--max-size $(MAX_SIZE) \
 		--min-occurrences $(MIN_OCCURRENCES) \
-		--area-factor $(AREA_FACTOR)
+		--area-factor $(AREA_FACTOR) \
+		--rtl $(RTL)
 endif
 
 # ---------------------------------------------------------------------------

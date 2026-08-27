@@ -101,7 +101,7 @@ Outputs:
 
 #### `aion-opt-run-all`
 
-Runs the complete flow in one shot: pattern mining, cell generation, hierarchical and flat netlist rewriting, reports, and LEC. SEC is run automatically if matching RTL files are found under the searched RTL directories.
+Runs the complete flow in one shot: pattern mining, cell generation, hierarchical and flat netlist rewriting, reports, and LEC. SEC is run automatically when existing RTL files are passed via `RTL=`.
 
 ```bash
 make aion-opt-run-all \
@@ -155,7 +155,7 @@ Verification-specific variables (used by `aion-opt-lec` and `aion-opt-sec`):
 |----------|---------|-------------|
 | `REF` | `$(INPUT)` | Reference netlist for LEC |
 | `MOD` | `$(REWRITE_NETLIST) $(CELLS)` | Modified netlist(s) for LEC |
-| `RTL` | *(none)* | RTL source file(s) for SEC |
+| `RTL` | `examples/aion_opt/pm32.v examples/aion_opt/spm.v` | RTL source file(s) for SEC and `run-all` |
 | `NETLIST` | `$(RUN_ALL_FLAT)` | Synthesized netlist for SEC |
 | `LIB` | `tech/lib/sg13g2_stdcell_typ_1p20V_25C.lib` | Liberty timing library for formal checks (script default) |
 

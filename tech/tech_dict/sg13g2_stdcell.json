@@ -1,0 +1,780 @@
+{
+  "cells": {
+    "sg13g2_a21o_1": {
+      "area": 12.7008,
+      "pins": {
+        "A2": "input",
+        "A1": "input",
+        "B1": "input",
+        "X": "output"
+      },
+      "function": "((A1*A2)+B1)"
+    },
+    "sg13g2_a21o_2": {
+      "area": 14.5152,
+      "pins": {
+        "A2": "input",
+        "A1": "input",
+        "B1": "input",
+        "X": "output"
+      },
+      "function": "((A1*A2)+B1)"
+    },
+    "sg13g2_a21oi_1": {
+      "area": 9.072,
+      "pins": {
+        "A1": "input",
+        "A2": "input",
+        "Y": "output",
+        "B1": "input"
+      },
+      "function": "!((A1*A2)+B1)"
+    },
+    "sg13g2_a21oi_2": {
+      "area": 14.5152,
+      "pins": {
+        "B1": "input",
+        "Y": "output",
+        "A2": "input",
+        "A1": "input"
+      },
+      "function": "!((A1*A2)+B1)"
+    },
+    "sg13g2_a221oi_1": {
+      "area": 14.5152,
+      "pins": {
+        "B2": "input",
+        "C1": "input",
+        "B1": "input",
+        "A1": "input",
+        "Y": "output",
+        "A2": "input"
+      },
+      "function": "!((A1*A2)+(B1*B2)+C1)"
+    },
+    "sg13g2_a22oi_1": {
+      "area": 10.8864,
+      "pins": {
+        "Y": "output",
+        "B1": "input",
+        "B2": "input",
+        "A2": "input",
+        "A1": "input"
+      },
+      "function": "!((A1*A2)+(B1*B2))"
+    },
+    "sg13g2_and2_1": {
+      "area": 9.072,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "X": "output"
+      },
+      "function": "(A*B)"
+    },
+    "sg13g2_and2_2": {
+      "area": 10.8864,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "X": "output"
+      },
+      "function": "(A*B)"
+    },
+    "sg13g2_and3_1": {
+      "area": 12.7008,
+      "pins": {
+        "X": "output",
+        "A": "input",
+        "B": "input",
+        "C": "input"
+      },
+      "function": "(A*B*C)"
+    },
+    "sg13g2_and3_2": {
+      "area": 12.7008,
+      "pins": {
+        "X": "output",
+        "A": "input",
+        "B": "input",
+        "C": "input"
+      },
+      "function": "(A*B*C)"
+    },
+    "sg13g2_and4_1": {
+      "area": 14.5152,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "D": "input",
+        "X": "output"
+      },
+      "function": "(A*B*C*D)"
+    },
+    "sg13g2_and4_2": {
+      "area": 16.3296,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "D": "input",
+        "X": "output"
+      },
+      "function": "(A*B*C*D)"
+    },
+    "sg13g2_antennanp": {
+      "area": 5.4432,
+      "pins": {
+        "A": "input"
+      }
+    },
+    "sg13g2_buf_1": {
+      "area": 7.2576,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_buf_16": {
+      "area": 45.36,
+      "pins": {
+        "X": "output",
+        "A": "input"
+      },
+      "function": "A"
+    },
+    "sg13g2_buf_2": {
+      "area": 9.072,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_buf_4": {
+      "area": 14.5152,
+      "pins": {
+        "X": "output",
+        "A": "input"
+      },
+      "function": "A"
+    },
+    "sg13g2_buf_8": {
+      "area": 23.5872,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_decap_4": {
+      "area": 7.2576,
+      "pins": {}
+    },
+    "sg13g2_decap_8": {
+      "area": 12.7008,
+      "pins": {}
+    },
+    "sg13g2_dfrbp_1": {
+      "area": 52.6176,
+      "pins": {
+        "RESET_B": "input",
+        "D": "input",
+        "Q": "output",
+        "Q_N": "output",
+        "CLK": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dfrbp_2": {
+      "area": 54.432,
+      "pins": {
+        "RESET_B": "input",
+        "D": "input",
+        "Q": "output",
+        "Q_N": "output",
+        "CLK": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dfrbpq_1": {
+      "area": 48.9888,
+      "pins": {
+        "RESET_B": "input",
+        "D": "input",
+        "Q": "output",
+        "CLK": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dfrbpq_2": {
+      "area": 50.8032,
+      "pins": {
+        "RESET_B": "input",
+        "D": "input",
+        "Q": "output",
+        "CLK": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dlhq_1": {
+      "area": 30.8448,
+      "pins": {
+        "D": "input",
+        "GATE": "input",
+        "Q": "output"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dlhr_1": {
+      "area": 32.6592,
+      "pins": {
+        "D": "input",
+        "GATE": "input",
+        "RESET_B": "input",
+        "Q": "output",
+        "Q_N": "output"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dlhrq_1": {
+      "area": 27.216,
+      "pins": {
+        "D": "input",
+        "GATE": "input",
+        "RESET_B": "input",
+        "Q": "output"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dllr_1": {
+      "area": 34.4736,
+      "pins": {
+        "D": "input",
+        "GATE_N": "input",
+        "RESET_B": "input",
+        "Q_N": "output",
+        "Q": "output"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dllrq_1": {
+      "area": 29.0304,
+      "pins": {
+        "D": "input",
+        "GATE_N": "input",
+        "RESET_B": "input",
+        "Q": "output"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_dlygate4sd1_1": {
+      "area": 14.5152,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_dlygate4sd2_1": {
+      "area": 14.5152,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_dlygate4sd3_1": {
+      "area": 16.3296,
+      "pins": {
+        "A": "input",
+        "X": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_ebufn_2": {
+      "area": 18.144,
+      "pins": {
+        "TE_B": "input",
+        "A": "input",
+        "Z": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_ebufn_4": {
+      "area": 27.216,
+      "pins": {
+        "A": "input",
+        "TE_B": "input",
+        "Z": "output"
+      },
+      "function": "A"
+    },
+    "sg13g2_ebufn_8": {
+      "area": 45.36,
+      "pins": {
+        "Z": "output",
+        "A": "input",
+        "TE_B": "input"
+      },
+      "function": "A"
+    },
+    "sg13g2_einvn_2": {
+      "area": 16.3296,
+      "pins": {
+        "Z": "output",
+        "A": "input",
+        "TE_B": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_einvn_4": {
+      "area": 23.5872,
+      "pins": {
+        "Z": "output",
+        "A": "input",
+        "TE_B": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_einvn_8": {
+      "area": 39.9168,
+      "pins": {
+        "A": "input",
+        "Z": "output",
+        "TE_B": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_fill_1": {
+      "area": 1.8144,
+      "pins": {}
+    },
+    "sg13g2_fill_2": {
+      "area": 3.6288,
+      "pins": {}
+    },
+    "sg13g2_fill_4": {
+      "area": 7.2576,
+      "pins": {}
+    },
+    "sg13g2_fill_8": {
+      "area": 14.5152,
+      "pins": {}
+    },
+    "sg13g2_inv_1": {
+      "area": 5.4432,
+      "pins": {
+        "Y": "output",
+        "A": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_inv_16": {
+      "area": 34.4736,
+      "pins": {
+        "A": "input",
+        "Y": "output"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_inv_2": {
+      "area": 7.2576,
+      "pins": {
+        "Y": "output",
+        "A": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_inv_4": {
+      "area": 10.8864,
+      "pins": {
+        "A": "input",
+        "Y": "output"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_inv_8": {
+      "area": 18.144,
+      "pins": {
+        "Y": "output",
+        "A": "input"
+      },
+      "function": "!(A)"
+    },
+    "sg13g2_lgcp_1": {
+      "area": 27.216,
+      "pins": {
+        "GATE": "input",
+        "CLK": "input",
+        "GCLK": "output"
+      },
+      "function": "CLK * int_GATE"
+    },
+    "sg13g2_mux2_1": {
+      "area": 18.144,
+      "pins": {
+        "A0": "input",
+        "A1": "input",
+        "S": "input",
+        "X": "output"
+      },
+      "function": "(!S*A0)+(S*A1)"
+    },
+    "sg13g2_mux2_2": {
+      "area": 19.9584,
+      "pins": {
+        "A0": "input",
+        "A1": "input",
+        "S": "input",
+        "X": "output"
+      },
+      "function": "(!S*A0)+(S*A1)"
+    },
+    "sg13g2_mux4_1": {
+      "area": 38.1024,
+      "pins": {
+        "S0": "input",
+        "A0": "input",
+        "A1": "input",
+        "A2": "input",
+        "A3": "input",
+        "S1": "input",
+        "X": "output"
+      },
+      "function": "(A0*(!S0*!S1))+(A1*(S0*!S1))+(A2*(!S0*S1))+(A3*(S0*S1))"
+    },
+    "sg13g2_nand2_1": {
+      "area": 7.2576,
+      "pins": {
+        "Y": "output",
+        "A": "input",
+        "B": "input"
+      },
+      "function": "!(A*B)"
+    },
+    "sg13g2_nand2_2": {
+      "area": 10.8864,
+      "pins": {
+        "Y": "output",
+        "A": "input",
+        "B": "input"
+      },
+      "function": "!(A*B)"
+    },
+    "sg13g2_nand2b_1": {
+      "area": 9.072,
+      "pins": {
+        "Y": "output",
+        "B": "input",
+        "A_N": "input"
+      },
+      "function": "!(!A_N*B)"
+    },
+    "sg13g2_nand2b_2": {
+      "area": 14.5152,
+      "pins": {
+        "Y": "output",
+        "B": "input",
+        "A_N": "input"
+      },
+      "function": "!(!A_N*B)"
+    },
+    "sg13g2_nand3_1": {
+      "area": 9.072,
+      "pins": {
+        "B": "input",
+        "C": "input",
+        "A": "input",
+        "Y": "output"
+      },
+      "function": "!(A*B*C)"
+    },
+    "sg13g2_nand3b_1": {
+      "area": 12.7008,
+      "pins": {
+        "B": "input",
+        "C": "input",
+        "Y": "output",
+        "A_N": "input"
+      },
+      "function": "!(!A_N*B*C)"
+    },
+    "sg13g2_nand4_1": {
+      "area": 10.8864,
+      "pins": {
+        "B": "input",
+        "C": "input",
+        "A": "input",
+        "Y": "output",
+        "D": "input"
+      },
+      "function": "!(A*B*C*D)"
+    },
+    "sg13g2_nor2_1": {
+      "area": 7.2576,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "Y": "output"
+      },
+      "function": "!(A+B)"
+    },
+    "sg13g2_nor2_2": {
+      "area": 10.8864,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "Y": "output"
+      },
+      "function": "!(A+B)"
+    },
+    "sg13g2_nor2b_1": {
+      "area": 9.072,
+      "pins": {
+        "A": "input",
+        "B_N": "input",
+        "Y": "output"
+      },
+      "function": "!(A+!B_N)"
+    },
+    "sg13g2_nor2b_2": {
+      "area": 12.7008,
+      "pins": {
+        "A": "input",
+        "B_N": "input",
+        "Y": "output"
+      },
+      "function": "!(A+!B_N)"
+    },
+    "sg13g2_nor3_1": {
+      "area": 9.072,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "Y": "output"
+      },
+      "function": "!(A+B+C)"
+    },
+    "sg13g2_nor3_2": {
+      "area": 16.3296,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "Y": "output"
+      },
+      "function": "!(A+B+C)"
+    },
+    "sg13g2_nor4_1": {
+      "area": 10.8864,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "D": "input",
+        "Y": "output"
+      },
+      "function": "!(A+B+C+D)"
+    },
+    "sg13g2_nor4_2": {
+      "area": 21.7728,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "Y": "output",
+        "D": "input"
+      },
+      "function": "!(A+B+C+D)"
+    },
+    "sg13g2_o21ai_1": {
+      "area": 9.072,
+      "pins": {
+        "B1": "input",
+        "Y": "output",
+        "A1": "input",
+        "A2": "input"
+      },
+      "function": "!((A1+A2)*B1)"
+    },
+    "sg13g2_or2_1": {
+      "area": 9.072,
+      "pins": {
+        "X": "output",
+        "B": "input",
+        "A": "input"
+      },
+      "function": "(A+B)"
+    },
+    "sg13g2_or2_2": {
+      "area": 10.8864,
+      "pins": {
+        "X": "output",
+        "B": "input",
+        "A": "input"
+      },
+      "function": "(A+B)"
+    },
+    "sg13g2_or3_1": {
+      "area": 12.7008,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "X": "output"
+      },
+      "function": "(A+B+C)"
+    },
+    "sg13g2_or3_2": {
+      "area": 14.5152,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "X": "output"
+      },
+      "function": "(A+B+C)"
+    },
+    "sg13g2_or4_1": {
+      "area": 14.5152,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "D": "input",
+        "X": "output"
+      },
+      "function": "(A+B+C+D)"
+    },
+    "sg13g2_or4_2": {
+      "area": 16.3296,
+      "pins": {
+        "A": "input",
+        "B": "input",
+        "C": "input",
+        "D": "input",
+        "X": "output"
+      },
+      "function": "(A+B+C+D)"
+    },
+    "sg13g2_sdfbbp_1": {
+      "area": 63.504,
+      "pins": {
+        "Q": "output",
+        "Q_N": "output",
+        "RESET_B": "input",
+        "SET_B": "input",
+        "D": "input",
+        "SCE": "input",
+        "SCD": "input",
+        "CLK": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_sdfrbp_1": {
+      "area": 68.9472,
+      "pins": {
+        "RESET_B": "input",
+        "SCD": "input",
+        "Q": "output",
+        "CLK": "input",
+        "D": "input",
+        "Q_N": "output",
+        "SCE": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_sdfrbp_2": {
+      "area": 72.576,
+      "pins": {
+        "RESET_B": "input",
+        "SCD": "input",
+        "Q": "output",
+        "CLK": "input",
+        "SCE": "input",
+        "Q_N": "output",
+        "D": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_sdfrbpq_1": {
+      "area": 63.504,
+      "pins": {
+        "Q": "output",
+        "CLK": "input",
+        "RESET_B": "input",
+        "SCD": "input",
+        "D": "input",
+        "SCE": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_sdfrbpq_2": {
+      "area": 65.3184,
+      "pins": {
+        "Q": "output",
+        "CLK": "input",
+        "RESET_B": "input",
+        "SCD": "input",
+        "D": "input",
+        "SCE": "input"
+      },
+      "function": "IQ"
+    },
+    "sg13g2_sighold": {
+      "area": 9.072,
+      "pins": {
+        "SH": "inout"
+      }
+    },
+    "sg13g2_slgcp_1": {
+      "area": 30.8448,
+      "pins": {
+        "GATE": "input",
+        "SCE": "input",
+        "CLK": "input",
+        "GCLK": "output"
+      },
+      "function": "CLK * int_GATE"
+    },
+    "sg13g2_tiehi": {
+      "area": 7.2576,
+      "pins": {
+        "L_HI": "output"
+      },
+      "function": "1"
+    },
+    "sg13g2_tielo": {
+      "area": 7.2576,
+      "pins": {
+        "L_LO": "output"
+      },
+      "function": "0"
+    },
+    "sg13g2_xnor2_1": {
+      "area": 14.5152,
+      "pins": {
+        "Y": "output",
+        "A": "input",
+        "B": "input"
+      },
+      "function": "!(A^B)"
+    },
+    "sg13g2_xor2_1": {
+      "area": 14.5152,
+      "pins": {
+        "B": "input",
+        "A": "input",
+        "X": "output"
+      },
+      "function": "(A^B)"
+    }
+  },
+  "strength_suffixes": [
+    "_[0-9]+"
+  ]
+}

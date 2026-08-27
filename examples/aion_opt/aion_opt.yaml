@@ -1,0 +1,14 @@
+# Example aion_opt configuration file.
+# Load it with:
+#   make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml
+# or override individual values on the command line.
+
+input_netlist: examples/aion_opt/pm32.nl.v
+cell_lib: tech/tech_dict/sg13g2_stdcell.json
+top_module: pm32
+max_pattern_size: 3
+min_occurrences: 2
+collapse_strengths: true
+allow_overlapping: false
+area_factor: 0.85
+output_dir: build/aion_opt

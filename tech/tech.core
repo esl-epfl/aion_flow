@@ -1,0 +1,23 @@
+CAPI=2:
+
+# ================================================================
+#  Project:     AION
+#  Author:      Filippo Quadri <filippo.quadri@epfl.ch>
+#  Created:     2026-08-13
+#  Description: Tech - FuseSoC Core File
+# ================================================================
+
+name: epfl:aion:tech:1.0.0
+description: Tech Wrapper
+
+filesets:
+  rtl:
+    files:
+      - rtl/sg13g2_stdcell.v
+      - rtl/sg13g2_udp.v
+    file_type: verilogSource
+
+targets:
+  default: &default
+    filesets:
+      - rtl

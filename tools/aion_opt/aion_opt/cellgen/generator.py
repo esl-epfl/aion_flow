@@ -133,12 +133,15 @@ class CellGenerator:
 
         module_name = self.module_name(pattern, module_id)
         template = self.env.get_template("aion_cell_v.j2")
-        return template.render(
+        rendered = template.render(
             module_name=module_name,
             ports=ports,
             wires=wires,
             instances=instances,
         )
+        # Embed the canonical key so rewrite can map mined patterns back to
+        # user-provided cell modules without regenerating them.
+        return f"// AION canonical_key: {pattern.canonical_key}\n{rendered}"
 
     @staticmethod
     def module_name(pattern: Pattern, module_id: int) -> str:

@@ -37,7 +37,8 @@ make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml BUILD_DIR=build/pm3
 | `make aion-opt-run-all` | Full flow end-to-end |
 | `make aion-opt-lec` | Logical equivalence check |
 | `make aion-opt-sec` | Sequential equivalence check |
-| `make aion-opt-clean` | Remove build outputs |
+| `make aion-opt-clean` | Remove aion_opt build outputs |
+| `make clean` | Remove all build outputs |
 
 ## Cluster extraction (`aion_opt`)
 
@@ -76,20 +77,27 @@ Outputs:
 
 #### `aion-opt-rewrite`
 
-Rewrites the input netlist by replacing occurrences of the mined patterns with instances of the generated AION cells.
+Rewrites the input netlist by replacing occurrences of mined patterns with instances of the AION cells supplied by the user. The `--cells`/`CELLS` argument is now an **input** cell library; `rewrite` reads it, matches its modules to the patterns it mines, and only substitutes occurrences for which a matching cell exists. It never regenerates or overwrites the cell file.
 
 ```bash
+make aion-opt-generate-cells \
+    INPUT=examples/aion_opt/pm32.nl.v \
+    TOP=pm32 \
+    BUILD_DIR=build/pm32
+
 make aion-opt-rewrite \
     INPUT=examples/aion_opt/pm32.nl.v \
     TOP=pm32 \
     BUILD_DIR=build/pm32
 ```
 
+The default `CELLS` path is `$(BUILD_DIR)/aion_cells.v`, so the two-step example above reuses the cells generated in the first step.
+
 Outputs:
 - `$(REWRITE_NETLIST)` (default: `$(BUILD_DIR)/$(TOP)_optimized.v`) — hierarchical netlist using AION cells
 - `$(REWRITE_REPORT).json`, `.md`, `.html` (default: `$(BUILD_DIR)/report`) — rewrite reports
 
-> **How rewrite knows what to replace:** `aion-opt-rewrite` re-runs the graph construction and pattern mining on the input netlist (using the same `MAX_SIZE`, `MIN_OCCURRENCES`, and `AREA_FACTOR`), regenerates the AION cell modules, and then substitutes each selected occurrence with the matching regenerated cell. The `CELLS` variable therefore acts as an **output path** for the regenerated cell library, not as an input list of pre-generated cells.
+> **Manual filtering:** because `rewrite` only uses the cells actually present in `CELLS`, you can edit the generated `aion_cells.v` (e.g. delete unwanted modules) and then re-run `rewrite` to apply a hand-picked subset. Cells produced by `generate-cells` contain an embedded `// AION canonical_key: <key>` comment that makes matching fast and name-independent. If the comment is missing, `rewrite` falls back to deriving the canonical key from the module structure.
 
 #### `aion-opt-run-all`
 
@@ -135,7 +143,7 @@ Per-command output variables:
 | Variable | Default | Used by |
 |----------|---------|---------|
 | `GRAPH2V_OUTPUT` | `$(BUILD_DIR)/$(TOP)_graph2verilog.v` | `graph2verilog` |
-| `CELLS` | `$(BUILD_DIR)/aion_cells.v` | `generate-cells`, `rewrite`, `run-all` |
+| `CELLS` | `$(BUILD_DIR)/aion_cells.v` | Output of `generate-cells`; input cell library for `rewrite` and `run-all` |
 | `PATTERN_REPORT` | `$(BUILD_DIR)/pattern_report.json` | `generate-cells` |
 | `REWRITE_NETLIST` | `$(BUILD_DIR)/$(TOP)_optimized.v` | `rewrite`, `run-all` |
 | `REWRITE_REPORT` | `$(BUILD_DIR)/report` | `rewrite`, `run-all` |

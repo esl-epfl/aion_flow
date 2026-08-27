@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html as html_module
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,11 +23,13 @@ def _pattern_summary(
     cell_lib: "CellLib",
     area_factor: float,
     module_index: dict[str, int] | None = None,
+    occurrence_count: int | None = None,
 ) -> dict[str, Any]:
     rep = occurrences[0]
     area = _pattern_area(rep, cell_lib)
     new_area = area * area_factor
     saved_per_occ = area - new_area
+    count = len(occurrences) if occurrence_count is None else occurrence_count
     return {
         "pattern_key": key,
         "module_name": (
@@ -35,11 +38,11 @@ def _pattern_summary(
             else None
         ),
         "size": rep.size(),
-        "occurrences": len(occurrences),
+        "occurrences": count,
         "node_types": rep.node_types,
-        "total_original_area": area * len(occurrences),
-        "total_new_area": new_area * len(occurrences),
-        "total_saved_area": saved_per_occ * len(occurrences),
+        "total_original_area": area * count,
+        "total_new_area": new_area * count,
+        "total_saved_area": saved_per_occ * count,
         "example_boundary_inputs": list(rep.boundary_inputs),
         "example_boundary_outputs": list(rep.boundary_outputs),
     }
@@ -140,9 +143,10 @@ def write_rewrite_report(
         },
         "patterns": [
             {
+                **_pattern_summary(
+                    key, patterns[key], cell_lib, area_factor, None, occurrence_count=count
+                ),
                 "module_name": module_names[key],
-                "occurrences": count,
-                **_pattern_summary(key, patterns[key], cell_lib, area_factor, None),
             }
             for key, count in selected_counts.items()
         ],
@@ -181,6 +185,8 @@ def _write_markdown(path: Path, data: dict[str, Any]) -> None:
         f"| Estimated area savings | {s['estimated_area_savings']:.4f} ({s['estimated_area_savings_percent']:.2f}%) |",
         f"| Original total area | {s.get('original_total_area', s['original_replaced_area']):.4f} |",
         f"| Estimated total new area | {s.get('estimated_total_new_area', s['estimated_new_area']):.4f} |",
+        "",
+        "_All area values are in library area units._",
         "",
         "## Applied Patterns",
         "",
@@ -227,6 +233,25 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
         else 0.0
     )
 
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    ICON_GRID = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>'''
+    ICON_BOLT = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>'''
+    ICON_CUBE = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>'''
+    ICON_MINIMIZE = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2" /></svg>'''
+    ICON_STAR = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>'''
+
+    def card(icon: str, label: str, value: str, delta: str, tone: str = "good") -> str:
+        tone_class = "" if tone == "good" else "negative"
+        return f"""
+        <div class="card">
+          <div class="card-icon">{icon}</div>
+          <div class="card-label">{html_module.escape(label)}</div>
+          <div class="card-value">{value}</div>
+          <div class="card-delta {tone_class}">{html_module.escape(delta)}</div>
+        </div>
+        """
+
     def pct_bar(label: str, value: float, max_value: float, color: str) -> str:
         pct = (value / max_value * 100) if max_value else 0.0
         return f"""
@@ -239,8 +264,8 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
         </div>
         """
 
-    def donut_chart(percent: float) -> str:
-        radius = 36
+    def donut_chart(percent: float, label: str) -> str:
+        radius = 42
         circumference = 2 * 3.1416 * radius
         offset = circumference * (1 - percent / 100)
         return f"""
@@ -252,19 +277,28 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
           </svg>
           <div class="donut-text">
             <span class="donut-percent">{percent:.1f}%</span>
-            <span class="donut-label">area saved</span>
+            <span class="donut-label">{html_module.escape(label)}</span>
           </div>
         </div>
         """
 
+    MEDAL_COLORS = {0: "#fbbf24", 1: "#94a3b8", 2: "#f97316"}
+
+    def medal(rank: int) -> str:
+        color = MEDAL_COLORS.get(rank)
+        if color:
+            return f'<span class="medal" title="#{rank + 1} top pattern" style="color:{color}">{ICON_STAR}</span>'
+        return f'<span class="rank">#{rank + 1}</span>'
+
     pattern_rows = []
-    for p in patterns:
+    for rank, p in enumerate(patterns):
         share = (p["total_saved_area"] / total_savings * 100) if total_savings else 0.0
         inputs = len(p.get("example_boundary_inputs", []))
         outputs = len(p.get("example_boundary_outputs", []))
         pattern_rows.append(
             f"""
             <tr>
+              <td class="rank-cell">{medal(rank)}</td>
               <td class="mono">{html_module.escape(str(p['module_name']))}</td>
               <td>{p['size']}</td>
               <td>{p['occurrences']}</td>
@@ -274,7 +308,7 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
               <td>{p['total_new_area']:.4f}</td>
               <td class="savings">{p['total_saved_area']:.4f}</td>
               <td>
-                <div class="mini-bar">
+                <div class="mini-bar" title="{share:.1f}% of total savings">
                   <div class="mini-bar-fill" style="width:{share:.1f}%"></div>
                 </div>
                 <span class="share">{share:.1f}%</span>
@@ -288,65 +322,94 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>aion_opt Rewrite Report</title>
+  <title>AION Flow - Optimization Report</title>
   <style>
     :root {{
-      --bg: #0f172a;
-      --panel: #1e293b;
-      --panel-2: #27354f;
-      --text: #e2e8f0;
+      --bg: #0b0f19;
+      --panel: #151b2b;
+      --panel-2: #1f293b;
+      --text: #f1f5f9;
       --muted: #94a3b8;
       --accent: #38bdf8;
       --accent-2: #818cf8;
       --success: #34d399;
       --danger: #f472b6;
-      --border: #334155;
-      --radius: 14px;
-      --shadow: 0 10px 30px rgba(0,0,0,0.35);
+      --warning: #fbbf24;
+      --border: #28334d;
+      --radius: 16px;
+      --shadow: 0 20px 40px rgba(0,0,0,0.45);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg);
+      background:
+        radial-gradient(ellipse at 0% 0%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+        radial-gradient(ellipse at 100% 0%, rgba(129, 140, 248, 0.08) 0%, transparent 40%),
+        var(--bg);
       color: var(--text);
-      line-height: 1.5;
+      line-height: 1.55;
     }}
     header {{
-      background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
-      padding: 3rem 1.5rem 3.5rem;
+      background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 55%, #8b5cf6 100%);
+      padding: 4rem 1.5rem 4.5rem;
       text-align: center;
       position: relative;
       overflow: hidden;
+    }}
+    header::before {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(circle at 50% 50%, black 0%, transparent 70%);
+      -webkit-mask-image: radial-gradient(circle at 50% 50%, black 0%, transparent 70%);
     }}
     header::after {{
       content: "";
       position: absolute;
       inset: 0;
-      background: radial-gradient(circle at 20% 30%, rgba(255,255,255,0.12) 0%, transparent 40%),
-                  radial-gradient(circle at 80% 70%, rgba(255,255,255,0.08) 0%, transparent 40%);
+      background: radial-gradient(circle at 20% 30%, rgba(255,255,255,0.14) 0%, transparent 45%),
+                  radial-gradient(circle at 80% 70%, rgba(255,255,255,0.10) 0%, transparent 45%);
     }}
-    header h1 {{ margin: 0; font-size: 2.4rem; letter-spacing: -0.03em; position: relative; z-index: 1; }}
-    header p {{ margin: 0.5rem 0 0; opacity: 0.9; font-size: 1.1rem; position: relative; z-index: 1; }}
-    main {{ max-width: 1200px; margin: -2rem auto 3rem; padding: 0 1.5rem; position: relative; z-index: 2; }}
+    header h1 {{ margin: 0; font-size: 2.6rem; font-weight: 800; letter-spacing: -0.04em; position: relative; z-index: 1; }}
+    header p {{ margin: 0.6rem 0 0; opacity: 0.92; font-size: 1.15rem; position: relative; z-index: 1; }}
+    .subtitle-note {{ margin: 0.4rem 0 0; opacity: 0.75; font-size: 0.95rem; font-style: italic; position: relative; z-index: 1; }}
+    main {{ max-width: 1200px; margin: -2.5rem auto 3rem; padding: 0 1.5rem; position: relative; z-index: 2; }}
     .cards {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 1.25rem;
       margin-bottom: 2rem;
     }}
     .card {{
-      background: var(--panel);
+      background: rgba(21, 27, 43, 0.85);
+      backdrop-filter: blur(10px);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 1.5rem;
       box-shadow: var(--shadow);
-      transition: transform 0.15s ease;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      position: relative;
+      overflow: hidden;
     }}
-    .card:hover {{ transform: translateY(-3px); }}
-    .card-label {{ color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.4rem; }}
-    .card-value {{ font-size: 2rem; font-weight: 700; }}
-    .card-delta {{ font-size: 0.95rem; margin-top: 0.3rem; color: var(--success); }}
+    .card::before {{
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      opacity: 0.8;
+    }}
+    .card:hover {{ transform: translateY(-4px); box-shadow: 0 24px 48px rgba(0,0,0,0.55); }}
+    .card-icon {{ color: var(--accent); margin-bottom: 0.6rem; }}
+    .card-icon svg {{ width: 1.6rem; height: 1.6rem; }}
+    .card-label {{ color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 0.35rem; }}
+    .card-value {{ font-size: 2.1rem; font-weight: 800; letter-spacing: -0.03em; }}
+    .card-delta {{ font-size: 0.95rem; margin-top: 0.35rem; color: var(--success); font-weight: 600; }}
     .card-delta.negative {{ color: var(--danger); }}
     .grid-2 {{
       display: grid;
@@ -355,41 +418,54 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
       margin-bottom: 2rem;
     }}
     .panel {{
-      background: var(--panel);
+      background: rgba(21, 27, 43, 0.85);
+      backdrop-filter: blur(10px);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 1.5rem;
+      padding: 1.75rem;
       box-shadow: var(--shadow);
     }}
-    .panel h2 {{ margin: 0 0 1.25rem; font-size: 1.2rem; color: var(--text); }}
-    .bar-row {{ display: grid; grid-template-columns: 110px 1fr 70px; align-items: center; gap: 0.8rem; margin: 0.7rem 0; font-size: 0.95rem; }}
-    .bar-label {{ color: var(--muted); text-align: right; }}
-    .bar-track {{ background: var(--panel-2); border-radius: 999px; height: 14px; overflow: hidden; }}
-    .bar-fill {{ height: 100%; border-radius: 999px; transition: width 0.8s ease; }}
-    .bar-value {{ font-weight: 600; text-align: right; }}
-    .donut {{ width: 160px; height: 160px; margin: 0 auto; position: relative; }}
-    .donut svg {{ transform: rotate(-90deg); width: 100%; height: 100%; }}
-    .donut-bg {{ fill: none; stroke: var(--panel-2); stroke-width: 12; }}
-    .donut-fg {{ fill: none; stroke: url(#gradDonut); stroke-width: 12; stroke-linecap: round; transition: stroke-dashoffset 1s ease; }}
+    .panel h2 {{ margin: 0 0 1.25rem; font-size: 1.25rem; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 0.5rem; }}
+    .panel h2 svg {{ width: 1.25rem; height: 1.25rem; color: var(--accent); }}
+    .bar-row {{ display: grid; grid-template-columns: 100px 1fr 70px; align-items: center; gap: 0.9rem; margin: 0.8rem 0; font-size: 0.95rem; }}
+    .bar-label {{ color: var(--muted); text-align: right; font-weight: 500; }}
+    .bar-track {{ background: var(--panel-2); border-radius: 999px; height: 16px; overflow: hidden; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }}
+    .bar-fill {{ height: 100%; border-radius: 999px; transition: width 1s ease; box-shadow: 0 0 12px rgba(56,189,248,0.25); }}
+    .bar-value {{ font-weight: 700; text-align: right; }}
+    .donut {{ width: 180px; height: 180px; margin: 0 auto; position: relative; }}
+    .donut svg {{ transform: rotate(-90deg); width: 100%; height: 100%; filter: drop-shadow(0 0 8px rgba(52,211,153,0.25)); }}
+    .donut-bg {{ fill: none; stroke: var(--panel-2); stroke-width: 10; }}
+    .donut-fg {{ fill: none; stroke: url(#gradDonut); stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 1.2s ease; }}
     .donut-text {{ position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
-    .donut-percent {{ font-size: 1.6rem; font-weight: 700; }}
-    .donut-label {{ font-size: 0.8rem; color: var(--muted); }}
-    .legend {{ display: flex; justify-content: center; gap: 1.5rem; margin-top: 1rem; font-size: 0.9rem; color: var(--muted); }}
-    .legend span {{ display: inline-flex; align-items: center; gap: 0.35rem; }}
-    .dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
+    .donut-percent {{ font-size: 1.9rem; font-weight: 800; letter-spacing: -0.03em; }}
+    .donut-label {{ font-size: 0.85rem; color: var(--muted); font-weight: 500; }}
+    .legend {{ display: flex; justify-content: center; gap: 1.75rem; margin-top: 1.25rem; font-size: 0.9rem; color: var(--muted); }}
+    .legend span {{ display: inline-flex; align-items: center; gap: 0.4rem; }}
+    .dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px currentColor; }}
+    .table-wrap {{ border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; }}
-    th, td {{ padding: 0.85rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }}
-    th {{ color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.06em; }}
-    tr:hover td {{ background: rgba(255,255,255,0.03); }}
-    td.savings {{ color: var(--success); font-weight: 600; }}
+    thead {{ position: sticky; top: 0; z-index: 3; }}
+    th {{ padding: 1rem 0.85rem; text-align: left; background: var(--panel-2); color: var(--muted); font-weight: 700; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); }}
+    td {{ padding: 0.95rem 0.85rem; text-align: left; border-bottom: 1px solid var(--border); }}
+    tbody tr:nth-child(even) {{ background: rgba(255,255,255,0.015); }}
+    tbody tr:hover td {{ background: rgba(255,255,255,0.045); }}
+    td.savings {{ color: var(--success); font-weight: 700; }}
     .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85rem; }}
-    .mini-bar {{ background: var(--panel-2); border-radius: 999px; height: 6px; width: 80px; overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 0.4rem; }}
-    .mini-bar-fill {{ height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; }}
-    .share {{ color: var(--muted); font-size: 0.8rem; }}
-    footer {{ text-align: center; color: var(--muted); padding: 2rem 1rem; font-size: 0.85rem; }}
+    .rank-cell {{ width: 40px; text-align: center; }}
+    .medal {{ filter: drop-shadow(0 0 4px rgba(255,255,255,0.2)); }}
+    .medal svg {{ width: 1.2rem; height: 1.2rem; }}
+    .rank {{ color: var(--muted); font-size: 0.8rem; font-weight: 700; }}
+    .mini-bar {{ background: var(--panel-2); border-radius: 999px; height: 7px; width: 90px; overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 0.5rem; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }}
+    .mini-bar-fill {{ height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width 1s ease; }}
+    .share {{ color: var(--muted); font-size: 0.8rem; font-weight: 600; min-width: 42px; display: inline-block; }}
+    footer {{ text-align: center; color: var(--muted); padding: 2.5rem 1rem; font-size: 0.85rem; }}
+    footer time {{ color: var(--text); font-weight: 600; }}
+    .muted-note {{ color: var(--muted); font-size: 0.85rem; margin-top: -0.75rem; margin-bottom: 1.25rem; }}
     @media (max-width: 640px) {{
-      .bar-row {{ grid-template-columns: 80px 1fr 55px; font-size: 0.85rem; }}
+      header h1 {{ font-size: 1.9rem; }}
+      .bar-row {{ grid-template-columns: 75px 1fr 55px; font-size: 0.85rem; }}
       .cards {{ grid-template-columns: 1fr; }}
+      .card-value {{ font-size: 1.8rem; }}
     }}
   </style>
 </head>
@@ -403,50 +479,25 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
     </defs>
   </svg>
   <header>
-    <h1>aion_opt Rewrite Report</h1>
+    <h1>AION Flow - Optimization Report</h1>
     <p>Post-synthesis pattern mining & area optimization</p>
+    <p class="subtitle-note">Area savings numbers are estimations based on an area reduction factor of {s['area_factor']}.</p>
   </header>
   <main>
     <section class="cards">
-      <div class="card">
-        <div class="card-label">Cell Reduction</div>
-        <div class="card-value">{s['cell_reduction']}</div>
-        <div class="card-delta">{cell_reduction_pct:.1f}% fewer cells</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Wires Eliminated</div>
-        <div class="card-value">{s['wires_eliminated']}</div>
-        <div class="card-delta">{net_reduction_pct:.1f}% fewer nets</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Patterns Applied</div>
-        <div class="card-value">{s['patterns_applied']}</div>
-        <div class="card-delta">{s['occurrences_applied']} occurrences</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Area Savings</div>
-        <div class="card-value">{s['estimated_area_savings']:.2f}</div>
-        <div class="card-delta">{area_savings_pct:.1f}% of replaced area</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Total Original Area</div>
-        <div class="card-value">{total_original_area:.2f}</div>
-        <div class="card-delta">whole design</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Estimated Total New Area</div>
-        <div class="card-value">{total_new_area:.2f}</div>
-        <div class="card-delta">{total_area_savings_pct:.1f}% total savings</div>
-      </div>
+      {card(ICON_GRID, "Cell Reduction", f"{s['cell_reduction']}", f"{cell_reduction_pct:.1f}% fewer cells")}
+      {card(ICON_BOLT, "Wires Eliminated", f"{s['wires_eliminated']}", f"{net_reduction_pct:.1f}% fewer nets")}
+      {card(ICON_CUBE, "Patterns Applied", f"{s['patterns_applied']}", f"{s['occurrences_applied']} occurrences")}
+      {card(ICON_MINIMIZE, "Area Savings", f"{s['estimated_area_savings']:.2f}", f"{area_savings_pct:.1f}% of replaced area")}
     </section>
 
     <section class="grid-2">
       <div class="panel">
         <h2>Resource Comparison</h2>
-        {pct_bar("Cells", original_cells, original_cells, "#38bdf8")}
-        {pct_bar("Cells", rewritten_cells, original_cells, "#818cf8")}
-        {pct_bar("Nets", s['original_nets'], s['original_nets'], "#38bdf8")}
-        {pct_bar("Nets", s['rewritten_nets'], s['original_nets'], "#818cf8")}
+        {pct_bar("Original cells", original_cells, original_cells, "#38bdf8")}
+        {pct_bar("Optimized cells", rewritten_cells, original_cells, "#818cf8")}
+        {pct_bar("Original nets", s['original_nets'], s['original_nets'], "#38bdf8")}
+        {pct_bar("Optimized nets", s['rewritten_nets'], s['original_nets'], "#818cf8")}
         <div class="legend">
           <span><span class="dot" style="background:#38bdf8"></span>Original</span>
           <span><span class="dot" style="background:#818cf8"></span>Optimized</span>
@@ -454,18 +505,20 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
       </div>
       <div class="panel">
         <h2>Area Overview</h2>
-        {donut_chart(total_area_savings_pct)}
+        <p class="muted-note">Area values are in library area units.</p>
+        {donut_chart(total_area_savings_pct, "total area saved")}
         {pct_bar("Original", total_original_area, total_original_area, "#38bdf8")}
         {pct_bar("New", total_new_area, total_original_area, "#34d399")}
       </div>
     </section>
 
     <section class="panel">
-      <h2>Applied Patterns</h2>
-      <div style="overflow-x:auto;">
+      <h2>{ICON_CUBE} Applied Patterns</h2>
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th></th>
               <th>Module</th>
               <th>Size</th>
               <th>Occurrences</th>
@@ -484,7 +537,7 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
       </div>
     </section>
   </main>
-  <footer>Generated by aion_opt · {html_module.escape(str(path.name))}</footer>
+  <footer>Generated by aion_opt · <time>{html_module.escape(generated_at)}</time></footer>
 </body>
 </html>"""
 

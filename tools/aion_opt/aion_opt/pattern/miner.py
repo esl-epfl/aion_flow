@@ -19,14 +19,19 @@ def mine_patterns(
     cell_lib: "CellLib",
     max_size: int = 3,
     min_occurrences: int = 2,
+    max_outputs: int | None = None,
 ) -> dict[str, list[Pattern]]:
     """Mine connected combinational patterns up to ``max_size`` nodes.
 
     Returns a mapping from canonical pattern key to all its occurrences.
     Only patterns with at least ``min_occurrences`` occurrences are kept.
+    If ``max_outputs`` is set, only patterns with at most that many boundary
+    outputs are kept.
     """
     if max_size < 2:
         raise ValueError("max_size must be at least 2")
+    if max_outputs is not None and max_outputs < 1:
+        raise ValueError("max_outputs must be at least 1")
 
     collapse = cell_lib.collapse_name
     nodes = sorted(sfg.nodes())
@@ -47,7 +52,8 @@ def mine_patterns(
                 pattern = build_pattern(
                     circuit, set(current), collapse, sfg.pin_edges
                 )
-                patterns[pattern.canonical_key].append(pattern)
+                if max_outputs is None or len(pattern.boundary_outputs) <= max_outputs:
+                    patterns[pattern.canonical_key].append(pattern)
 
             if len(current) >= max_size:
                 continue

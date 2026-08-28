@@ -40,8 +40,11 @@ make aion-opt-generate-cells \
     TOP=pm32 \
     MAX_SIZE=3 \
     MIN_OCCURRENCES=2 \
-    AREA_FACTOR=0.85
+    AREA_FACTOR=0.85 \
+    MAX_OUTPUTS=1
 ```
+
+`MAX_OUTPUTS=1` restricts mining to patterns with a single boundary output, which is required by downstream logic-minimization flows.
 
 Outputs:
 - `$(CELLS)` (default: `$(BUILD_DIR)/aion_cells.v`) — generated AION cell library
@@ -113,6 +116,7 @@ The following Makefile variables control the cluster-extraction flow:
 | `MAX_SIZE` | `3` | Maximum pattern size to mine (number of cells) |
 | `MIN_OCCURRENCES` | `2` | Minimum occurrences for a pattern to be kept |
 | `AREA_FACTOR` | `0.85` | Scaling factor for the generated AION cell area. Used to compute estimated area savings in reports and to score occurrences during greedy cover selection. |
+| `MAX_OUTPUTS` | (unset) | Only mine patterns with at most this many boundary outputs. Unset means no limit. Useful when downstream tools (e.g. logic minimizers) require single-output patterns. |
 
 Per-command output variables:
 

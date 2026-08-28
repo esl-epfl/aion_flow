@@ -2,7 +2,7 @@
 #  SPDX-FileCopyrightText:    2026 Filippo Quadri
 #  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
 #  Created:                   2026-08-27 16:19:43
-#  Updated:                   2026-08-28 16:32:32
+#  Updated:                   2026-08-28 18:25:05
 #  Description:               AION Flow - Makefile
 # ================================================================
 
@@ -69,6 +69,7 @@ AION_CHAR_NETLIST_DOCKER := $(if $(filter 1,$(AION_IN_DOCKER)),$(AION_CHAR_NETLI
 MAX_SIZE          ?= 3
 MIN_OCCURRENCES   ?= 2
 AREA_FACTOR       ?= 0.85
+MAX_OUTPUTS       ?= 
 
 # ---------------------------------------------------------------------------
 # Output paths (per command)
@@ -116,6 +117,7 @@ aion-opt-generate-cells: ## Mine patterns and generate AION cells
 		--max-size $(MAX_SIZE) \
 		--min-occurrences $(MIN_OCCURRENCES) \
 		--area-factor $(AREA_FACTOR) \
+		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS)) \
 		--output-cells $(CELLS) \
 		--output-report $(PATTERN_REPORT)
 
@@ -131,7 +133,8 @@ aion-opt-rewrite: ## Rewrite netlist with generated cells
 		--output-report $(REWRITE_REPORT) \
 		--max-size $(MAX_SIZE) \
 		--min-occurrences $(MIN_OCCURRENCES) \
-		--area-factor $(AREA_FACTOR)
+		--area-factor $(AREA_FACTOR) \
+		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS))
 
 aion-opt-run-all: ## Run the full aion_opt flow end-to-end
 	@mkdir -p $(BUILD_DIR_OPT)/work
@@ -149,6 +152,7 @@ else
 		--max-size $(MAX_SIZE) \
 		--min-occurrences $(MIN_OCCURRENCES) \
 		--area-factor $(AREA_FACTOR) \
+		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS)) \
 		--rtl $(RTL)
 endif
 

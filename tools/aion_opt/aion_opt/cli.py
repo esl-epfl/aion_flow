@@ -228,6 +228,7 @@ def cmd_generate_cells(args: argparse.Namespace) -> int:
         cell_lib,
         max_size=args.max_size,
         min_occurrences=args.min_occurrences,
+        max_outputs=args.max_outputs,
     )
     total_occurrences = sum(len(v) for v in patterns.values())
     print(
@@ -300,6 +301,7 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
     max_size = getattr(args, "max_size", 3)
     min_occurrences = getattr(args, "min_occurrences", 2)
     area_factor = getattr(args, "area_factor", 0.85)
+    max_outputs = getattr(args, "max_outputs", None)
 
     patterns = mine_patterns(
         circuit,
@@ -307,6 +309,7 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
         cell_lib,
         max_size=max_size,
         min_occurrences=min_occurrences,
+        max_outputs=max_outputs,
     )
     selected = select_cover(
         patterns,
@@ -374,6 +377,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
     max_size = args.max_size
     min_occurrences = args.min_occurrences
     area_factor = args.area_factor
+    max_outputs = getattr(args, "max_outputs", None)
 
     print(
         f"[run-all] Mining patterns up to size {max_size} "
@@ -385,6 +389,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
         cell_lib,
         max_size=max_size,
         min_occurrences=min_occurrences,
+        max_outputs=max_outputs,
     )
     selected = select_cover(
         patterns,
@@ -497,6 +502,68 @@ def cmd_run_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cells_to_spice(args: argparse.Namespace) -> int:
+    """Convert structural AION cell Verilog to gate-level SPICE netlists.
+
+    Each generated AION cell module becomes one ``.subckt`` that instantiates
+    PDK gates.  This is the input format expected by ``aion_minimizer``.
+    """
+    src = args.cells.read_text(encoding="utf-8")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    lib_text = args.gates.read_text(encoding="utf-8")
+    subckt_re = re.compile(r"^\s*\.subckt\s+(sg13g2_\w+)\s+(.*)$", re.MULTILINE)
+    pin_order: dict[str, list[str]] = {}
+    for cell, pins in subckt_re.findall(lib_text):
+        if cell not in pin_order:
+            pin_order[cell] = pins.split()
+
+    module_re = re.compile(
+        r"module\s+(AION_\w+)\s*\(([^)]*)\)\s*;(.*?)endmodule", re.S
+    )
+    inst_re = re.compile(r"(sg13g2_\w+)\s+(\w+)\s*\((.*?)\)\s*;", re.S)
+    conn_re = re.compile(r"\.(\w+)\s*\(\s*(\w+)\s*\)")
+
+    found = 0
+    for m in module_re.finditer(src):
+        name = m.group(1)
+        ports = [p.strip() for p in m.group(2).split(",") if p.strip()]
+        body = m.group(3)
+
+        lines = [f".subckt {name} {' '.join(ports)} VDD VSS"]
+        for im in inst_re.finditer(body):
+            cell = im.group(1)
+            iname = im.group(2)
+            conns = dict(conn_re.findall(im.group(3)))
+            pins = pin_order.get(cell, [])
+            if not pins:
+                print(
+                    f"[cells-to-spice] Warning: no pin order for {cell}",
+                    file=sys.stderr,
+                )
+                continue
+            mapped: list[str] = []
+            for pin in pins:
+                if pin in conns:
+                    mapped.append(conns[pin])
+                elif pin in ("VDD", "VSS"):
+                    mapped.append(pin)
+                else:
+                    raise RuntimeError(
+                        f"{name}: instance {iname} of {cell} missing pin {pin}"
+                    )
+            lines.append(f"X{iname} {' '.join(mapped)} {cell}")
+        lines.append(".ends")
+
+        out_path = args.output_dir / f"{name}.spice"
+        out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"[cells-to-spice] Wrote {out_path}")
+        found += 1
+
+    print(f"[cells-to-spice] Converted {found} cell module(s) to {args.output_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="aion_opt",
@@ -539,6 +606,12 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=0.85,
         help="Area reduction factor for new cells.",
+    )
+    gen.add_argument(
+        "--max-outputs",
+        type=int,
+        default=None,
+        help="Only mine patterns with at most this many outputs (default: no limit).",
     )
     gen.add_argument(
         "--output-cells",
@@ -595,6 +668,12 @@ def main(argv: list[str] | None = None) -> int:
         default=0.85,
         help="Area reduction factor for new cells.",
     )
+    rew.add_argument(
+        "--max-outputs",
+        type=int,
+        default=None,
+        help="Only mine patterns with at most this many outputs (default: no limit).",
+    )
     rew.set_defaults(func=cmd_rewrite)
 
     allp = subparsers.add_parser(
@@ -627,6 +706,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Area reduction factor for new cells.",
     )
     allp.add_argument(
+        "--max-outputs",
+        type=int,
+        default=None,
+        help="Only mine patterns with at most this many outputs (default: no limit).",
+    )
+    allp.add_argument(
         "--rtl",
         type=Path,
         nargs="+",
@@ -635,8 +720,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     allp.set_defaults(func=cmd_run_all)
 
+    c2s = subparsers.add_parser(
+        "cells-to-spice",
+        help="Convert generated AION cell Verilog to gate-level SPICE netlists.",
+    )
+    c2s.add_argument(
+        "--cells",
+        type=Path,
+        required=True,
+        help="Input AION cell library Verilog.",
+    )
+    c2s.add_argument(
+        "--gates",
+        type=Path,
+        required=True,
+        help="PDK gate-level SPICE library (used for pin order).",
+    )
+    c2s.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory for the generated per-cell SPICE files.",
+    )
+    c2s.set_defaults(func=cmd_cells_to_spice)
+
     args = parser.parse_args(argv)
     _load_config(args)
-    if args.input is None:
+    if args.command not in ("cells-to-spice",) and getattr(args, "input", None) is None:
         parser.error("the following arguments are required: --input")
     return args.func(args)

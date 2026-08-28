@@ -123,23 +123,3 @@ Run them with:
 python examples/aion_minimizer/run_example.py
 python examples/aion_minimizer/parse_example.py
 ```
-
-## Project layout
-
-```
-tools/aion_minimizer/
-├── aion_minimizer/        Python package
-│   ├── __main__.py        Allow `python -m aion_minimizer`
-│   ├── cli.py             CLI entry point
-│   ├── spice_parser.py    SPICE parser
-│   ├── spice_writer.py    SPICE emitter
-│   ├── minimizer.py       Boolean minimization
-│   ├── pn_network.py      P/N network generation
-│   ├── sizing.py          Transistor sizing
-│   ├── cost_model.py      Cost/scoring model
-│   ├── equivalence.py     Truth-table equivalence check
-│   ├── gate_extractor.py  Gate function extraction
-│   └── netlist_evaluator.py  Netlist flattening
-├── pyproject.toml         Package metadata
-└── README.md              This file
-```

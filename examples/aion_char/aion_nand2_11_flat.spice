@@ -1,0 +1,39 @@
+* SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+*
+* Worked example for the --custom-netlist / CUSTOM= flow of scripts/gen_cell_tb.py.
+*
+* AION_nand2_11 flattened to transistors: no sg13g2_* standard-cell subckts anywhere,
+* only sg13_lv_nmos / sg13_lv_pmos devices. The function it must implement, from
+* ../aion_cells.v:
+*
+*     w0 = !(I0 & I1)          sg13g2_nand2_1 g0
+*     O0 = !(w0 & I2)          sg13g2_nand2_1 g1     (i.e. O0 = (I0 & I1) | !I2)
+*
+* THE PORT ORDER IS A CONTRACT the generator checks: the Verilog module's own port
+* order -- inputs then outputs, exactly as declared in the module header -- followed by
+* VDD VSS. Get it wrong and generation is refused with the expected line printed.
+*
+* The device models come from the deck this file is included into (--model-lib), so
+* nothing needs including here.
+*
+* Sizes below are the PDK sg13g2_nand2_1 sizes, so this is electrically what the
+* reference resolves to: the example is about exercising the flow, not about proposing
+* a better circuit. Replace the topology or the sizing with your own and the same
+* 3-way check still applies -- gold vs reference vs this netlist.
+
+.subckt AION_nand2_11 I0 I1 I2 O0 VDD VSS
+
+* ---- stage 1: NAND2(I0, I1) -> w0 ----
+* pull-up: two PMOS in parallel; pull-down: two NMOS in series through na
+XP0 w0 I0 VDD VDD sg13_lv_pmos w=1.12u   l=130.00n ng=1 ad=3.808e-13 as=3.808e-13 pd=2.92e-06 ps=2.92e-06 m=1
+XP1 w0 I1 VDD VDD sg13_lv_pmos w=1.12u   l=130.00n ng=1 ad=3.808e-13 as=3.808e-13 pd=2.92e-06 ps=2.92e-06 m=1
+XN0 w0 I0 na  VSS sg13_lv_nmos w=740.00n l=130.00n ng=1 ad=2.516e-13 as=2.516e-13 pd=2.16e-06 ps=2.16e-06 m=1
+XN1 na I1 VSS VSS sg13_lv_nmos w=740.00n l=130.00n ng=1 ad=2.516e-13 as=2.516e-13 pd=2.16e-06 ps=2.16e-06 m=1
+
+* ---- stage 2: NAND2(w0, I2) -> O0 ----
+XP2 O0 w0 VDD VDD sg13_lv_pmos w=1.12u   l=130.00n ng=1 ad=3.808e-13 as=3.808e-13 pd=2.92e-06 ps=2.92e-06 m=1
+XP3 O0 I2 VDD VDD sg13_lv_pmos w=1.12u   l=130.00n ng=1 ad=3.808e-13 as=3.808e-13 pd=2.92e-06 ps=2.92e-06 m=1
+XN2 O0 w0 nb  VSS sg13_lv_nmos w=740.00n l=130.00n ng=1 ad=2.516e-13 as=2.516e-13 pd=2.16e-06 ps=2.16e-06 m=1
+XN3 nb I2 VSS VSS sg13_lv_nmos w=740.00n l=130.00n ng=1 ad=2.516e-13 as=2.516e-13 pd=2.16e-06 ps=2.16e-06 m=1
+
+.ends

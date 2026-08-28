@@ -25,6 +25,6 @@ if [ -t 1 ]; then
 fi
 
 exec docker exec ${DOCKER_FLAGS} -u "$(id -u):$(id -g)" iic-osic-tools_shell_uid_1000 \
-    bash -lc "export PDK=ihp-sg13g2; cd ${RUN_DIR} && \
+    bash -lc "export PDK=ihp-sg13g2; export AION_IN_DOCKER=1; cd ${RUN_DIR} && \
         printf '\n\033[1;36m========== AION CONTAINER OUTPUT ==========\033[0m\n\n' && \
         ${ARGS}"

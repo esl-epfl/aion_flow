@@ -83,6 +83,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Generate the YAML config and print the command without executing it.",
     )
+    common.add_argument(
+        "--in-docker",
+        action="store_true",
+        help="Run kepler-formal directly inside the EDA container instead of calling docker_run.sh.",
+    )
 
     lec_parser = subparsers.add_parser(
         "lec",
@@ -245,14 +250,20 @@ def _run_kepler(
     config_path: Path,
     log_file: Path,
     dry_run: bool = False,
+    in_docker: bool = False,
 ) -> tuple[int, str]:
-    # The container runs from the repo root, so pass a repo-relative config path.
-    cmd = [
-        "./docker_run.sh",
-        "kepler-formal",
-        "--config",
-        _relative(str(config_path)),
-    ]
+    config_rel = _relative(str(config_path))
+    if in_docker:
+        # Already inside the EDA container: run kepler-formal directly.
+        cmd = ["kepler-formal", "--config", config_rel]
+    else:
+        # The container runs from the repo root, so pass a repo-relative config path.
+        cmd = [
+            "./scripts/docker_run.sh",
+            "kepler-formal",
+            "--config",
+            config_rel,
+        ]
     print(f"\n[run_lec_sec] Command: {' '.join(cmd)}")
     print(f"[run_lec_sec] Streaming output to: {log_file}\n")
 
@@ -261,13 +272,16 @@ def _run_kepler(
         return 0, ""
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["PDK"] = "ihp-sg13g2"
     with open(log_file, "w", encoding="utf-8") as fh:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            cwd=SCRIPT_DIR,
+            cwd=REPO_ROOT,
+            env=env,
         )
         output_chunks: list[str] = []
         assert proc.stdout is not None
@@ -316,7 +330,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     artifacts_dir = run_dir / "artifacts"
 
     before = _snapshot_files(REPO_ROOT)
-    returncode, output = _run_kepler(config_path, kepler_log, dry_run=args.dry_run)
+    returncode, output = _run_kepler(
+        config_path, kepler_log, dry_run=args.dry_run, in_docker=args.in_docker
+    )
     after = _snapshot_files(REPO_ROOT)
 
     # Read full output from the log (more reliable than the streamed string).
@@ -331,7 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config_path,
             kepler_log,
             SCRIPT_DIR / "run_lec_sec.py",
-            SCRIPT_DIR / "docker_run.sh",
+            REPO_ROOT / "scripts" / "docker_run.sh",
         ],
     )
     # Kepler-formal may drop miter logs in the repo root; collect those too.

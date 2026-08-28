@@ -1,0 +1,224 @@
+/************************************************************************  TEMPLATE-DOC
+
+ Liberty TEMPLATE for scripts/gen_cell_lib.py -- IHP SG13G2 (low-voltage devices).
+
+ This whole comment block carries the marker TEMPLATE-DOC on its first line, which means
+ gen_cell_lib.py strips it when rendering: it documents the template, and does not belong
+ in the libraries generated from it.
+
+ Everything outside the @TOKEN@ placeholders is copied through verbatim, so this file
+ is where a technology's library-level constants live: units, delay/slew thresholds,
+ wire-load models and the look-up-table templates.  The characterizer reads the units
+ and the thresholds back out of the *filled* template and uses them both to place its
+ ngspice .meas thresholds and to scale its SI measurements -- so retargeting the tool
+ to another technology or another unit system is a matter of swapping this file.
+
+ The values below are taken from the PDK's own libraries
+ (libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_*.lib), so a library generated from this
+ template can be read alongside them in one STA run without a unit or threshold clash.
+
+ Required placeholders (gen_cell_lib.py refuses a template that is missing one):
+   @LIBRARY_NAME@ @CELLS@ @VOLTAGE@ @TEMPERATURE@ @INDEX_SLEW@ @INDEX_LOAD@
+ Optional placeholders (substituted when present):
+   @PROCESS@ @OPCOND_NAME@ @DATE@ @GENCMD@ @COMMENT@
+   @MAX_TRANSITION@ @MAX_CAPACITANCE@ @DEFAULT_INPUT_PIN_CAP@
+
+ Copyright 2024 IHP PDK Authors (library constants)
+ SPDX-License-Identifier: Apache-2.0
+
+************************************************************************/
+
+/************************************************************************
+
+ AUTO-GENERATED -- do not edit. Regenerate with:
+
+    @GENCMD@
+
+ Library constants (units, thresholds, wire loads) come from the IHP SG13G2 PDK
+ libraries; the cell data below was measured with ngspice.
+
+ Copyright 2024 IHP PDK Authors (library constants)
+ SPDX-License-Identifier: Apache-2.0
+
+************************************************************************/
+
+library (@LIBRARY_NAME@) {
+  comment : "@COMMENT@";
+  date : "@DATE@";
+  revision : "1.0";
+  delay_model : table_lookup;
+  capacitive_load_unit (1,pf);
+  current_unit : "1uA";
+  leakage_power_unit : "1pW";
+  pulling_resistance_unit : "1kohm";
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  default_cell_leakage_power : 0;
+  default_fanout_load : 1;
+  default_inout_pin_cap : 0.006;
+  default_input_pin_cap : @DEFAULT_INPUT_PIN_CAP@;
+  default_leakage_power_density : 0;
+  default_max_capacitance : @MAX_CAPACITANCE@;
+  default_max_fanout : 8;
+  default_max_transition : @MAX_TRANSITION@;
+  default_output_pin_cap : 0;
+  default_wire_load_area : 0.29;
+  default_wire_load_capacitance : 0.0003;
+  default_wire_load_mode : "top";
+  default_wire_load_resistance : 0.0057;
+  in_place_swap_mode : match_footprint;
+  input_threshold_pct_fall : 50;
+  input_threshold_pct_rise : 50;
+  nom_process : @PROCESS@;
+  nom_temperature : @TEMPERATURE@;
+  nom_voltage : @VOLTAGE@;
+  output_threshold_pct_fall : 50;
+  output_threshold_pct_rise : 50;
+  slew_derate_from_library : 1;
+  slew_lower_threshold_pct_fall : 20;
+  slew_lower_threshold_pct_rise : 20;
+  slew_upper_threshold_pct_fall : 80;
+  slew_upper_threshold_pct_rise : 80;
+  operating_conditions (@OPCOND_NAME@) {
+    process : @PROCESS@;
+    temperature : @TEMPERATURE@;
+    voltage : @VOLTAGE@;
+  }
+  default_operating_conditions : @OPCOND_NAME@;
+  wire_load ("Zero") {
+    area : 0.01;
+    capacitance : 0.0001;
+    fanout_length (1, 0.01);
+    fanout_length (5, 0.01);
+    fanout_length (20, 0.01);
+    resistance : 0.0001;
+    slope : 1;
+  }
+  wire_load ("0_1k") {
+    area : 0.36;
+    capacitance : 0.0001;
+    fanout_length (1, 6.43);
+    fanout_length (5, 38.56);
+    fanout_length (20, 146.8);
+    resistance : 0.0035;
+    slope : 7.387;
+  }
+  wire_load ("0_5k") {
+    area : 0.36;
+    capacitance : 0.0001;
+    fanout_length (1, 7.89);
+    fanout_length (5, 47.32);
+    fanout_length (20, 169.4);
+    resistance : 0.0042;
+    slope : 10.99;
+  }
+  wire_load ("1k") {
+    area : 0.36;
+    capacitance : 0.0002;
+    fanout_length (1, 9.93);
+    fanout_length (5, 59.59);
+    fanout_length (20, 215.6);
+    resistance : 0.0053;
+    slope : 10.9;
+  }
+  wire_load ("2k") {
+    area : 0.36;
+    capacitance : 0.0002;
+    fanout_length (1, 11.68);
+    fanout_length (5, 70.11);
+    fanout_length (20, 239.5);
+    resistance : 0.0063;
+    slope : 16.87;
+  }
+  wire_load ("5k") {
+    area : 0.36;
+    capacitance : 0.0003;
+    fanout_length (1, 13.44);
+    fanout_length (5, 80.62);
+    fanout_length (20, 287.1);
+    resistance : 0.0072;
+    slope : 14.58;
+  }
+  wire_load ("10k") {
+    area : 0.37;
+    capacitance : 0.0003;
+    fanout_length (1, 14.9);
+    fanout_length (5, 89.39);
+    fanout_length (20, 381.6);
+    resistance : 0.008;
+    slope : 18.94;
+  }
+  wire_load ("30k") {
+    area : 0.37;
+    capacitance : 0.0003;
+    fanout_length (1, 17.53);
+    fanout_length (5, 105.2);
+    fanout_length (20, 515.5);
+    resistance : 0.0094;
+    slope : 24.61;
+  }
+  wire_load ("50k") {
+    area : 0.37;
+    capacitance : 0.0005;
+    fanout_length (1, 28.33);
+    fanout_length (5, 170);
+    fanout_length (20, 607.6);
+    resistance : 0.0152;
+    slope : 31.81;
+  }
+  wire_load ("100k") {
+    area : 0.39;
+    capacitance : 0.0009;
+    fanout_length (1, 49.37);
+    fanout_length (5, 296.2);
+    fanout_length (20, 812.1);
+    resistance : 0.0265;
+    slope : 40.22;
+  }
+  wire_load ("200k") {
+    area : 0.41;
+    capacitance : 0.0016;
+    fanout_length (1, 84.71);
+    fanout_length (5, 508.3);
+    fanout_length (20, 1051.7);
+    resistance : 0.0456;
+    slope : 52.68;
+  }
+  wire_load ("500k") {
+    area : 0.45;
+    capacitance : 0.0027;
+    fanout_length (1, 141.4);
+    fanout_length (5, 848.3);
+    fanout_length (20, 1527.1);
+    resistance : 0.076;
+    slope : 67.44;
+  }
+  wire_load_selection ("4_metls_routing") {
+    wire_load_from_area (0, 635, 0_1k);
+    wire_load_from_area (635, 3175, 0_5k);
+    wire_load_from_area (3175, 6350, 1k);
+    wire_load_from_area (6350, 12701, 2k);
+    wire_load_from_area (12701, 31752, 5k);
+    wire_load_from_area (31752, 63504, 10k);
+    wire_load_from_area (63504, 190512, 30k);
+    wire_load_from_area (190512, 317520, 50k);
+    wire_load_from_area (317520, 635040, 100k);
+    wire_load_from_area (635040, 1.27008e+06, 200k);
+    wire_load_from_area (1.27008e+06, 3.1752e+06, 500k);
+  }
+  default_wire_load : "1k";
+  default_wire_load_selection : "4_metls_routing";
+  lu_table_template (TIMING_DELAY_7x7ds1) {
+    variable_1 : input_net_transition;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("@INDEX_SLEW@");
+    index_2 ("@INDEX_LOAD@");
+  }
+  power_lut_template (POWER_7x7ds1) {
+    variable_1 : input_transition_time;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("@INDEX_SLEW@");
+    index_2 ("@INDEX_LOAD@");
+  }
+@CELLS@
+}

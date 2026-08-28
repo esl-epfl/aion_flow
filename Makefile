@@ -2,7 +2,7 @@
 #  SPDX-FileCopyrightText:    2026 Filippo Quadri
 #  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
 #  Created:                   2026-08-27 16:19:43
-#  Updated:                   2026-08-27 18:08:09
+#  Updated:                   2026-08-28 16:32:32
 #  Description:               AION Flow - Makefile
 # ================================================================
 
@@ -17,7 +17,9 @@ REPO_ROOT := $(realpath .)
         aion-char-wave-spice aion-char-lib aion-char-lib-selfcheck \
         aion-char-lib-template aion-char-cells aion-char-verify-spice \
         aion-char-clean aion-char-clean-tb aion-char-clean-lib \
-        aion-char-clean-build clean clean_aion_opt clean_aion_char
+        aion-char-clean-build \
+        aion-minimizer-run aion-minimizer-verify-spice aion-minimizer-clean \
+        clean clean_aion_opt clean_aion_char clean_aion_minimizer
 
 # ---------------------------------------------------------------------------
 # Directories
@@ -25,9 +27,11 @@ REPO_ROOT := $(realpath .)
 BUILD_DIR         ?= build
 BUILD_DIR_OPT     ?= $(BUILD_DIR)/aion_opt
 BUILD_DIR_CHAR    ?= $(BUILD_DIR)/aion_char
+BUILD_DIR_MIN     ?= $(BUILD_DIR)/aion_minimizer
 AION_IN_DOCKER    ?= 0
 export AION_IN_DOCKER
 AION_OPT_DIR      := tools/aion_opt
+AION_MIN_DIR      := tools/aion_minimizer
 
 # Wrappers for aion_char targets: run directly inside the container, or invoke the
 # shared Docker runner when called from the host.
@@ -35,8 +39,9 @@ AION_CHAR_DOCKER_PREFIX := $(if $(filter 1,$(AION_IN_DOCKER)),,./scripts/docker_
 AION_CHAR_DOCKER_SUFFIX := $(if $(filter 1,$(AION_IN_DOCKER)),,")
 
 AION_CHAR_DIR     := tools/aion_char
-PYTHONPATH        := $(AION_OPT_DIR):$(AION_CHAR_DIR):$(PYTHONPATH)
+PYTHONPATH        := $(AION_OPT_DIR):$(AION_CHAR_DIR):$(AION_MIN_DIR):$(PYTHONPATH)
 AION_OPT          := python3 -m aion_opt
+AION_MIN          := python3 -m aion_minimizer
 VERIFY_SCRIPT     := scripts/verify/run_lec_sec.py
 
 # ---------------------------------------------------------------------------
@@ -46,6 +51,12 @@ INPUT             ?= examples/aion_opt/pm32.nl.v
 TOP               ?= pm32
 CELL_LIB          ?= tech/tech_dict/sg13g2_stdcell.json
 AION_CHAR_NETLIST ?= $(REPO_ROOT)/examples/aion_char/aion_cells.v
+
+# aion_minimizer inputs
+AION_MIN_INPUT    ?= $(REPO_ROOT)/examples/aion_minimizer/AION_inv_nand2_nor2.spice
+AION_MIN_GATES    ?= $(REPO_ROOT)/examples/aion_minimizer/sg13g2_stdcell.spice
+AION_MIN_OUTPUT   ?= $(BUILD_DIR_MIN)/AION_inv_nand2_nor2_minimized.spice
+AION_MIN_MODE     ?= transistor
 
 # Convert host paths that are passed into the Docker container to the
 # container-side mount point (/foss/designs/aion_flow/...).
@@ -254,6 +265,30 @@ aion-char-verify-spice: ## Verify a custom SPICE netlist for CELL (CELL=..., SPI
 		MODULE=$(CELL) CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(SPICE)))$(AION_CHAR_DOCKER_SUFFIX)
 
 # ---------------------------------------------------------------------------
+# aion_minimizer subcommands
+# ---------------------------------------------------------------------------
+aion-minimizer-run: ## Minimize a gate-level SPICE netlist into a transistor-level netlist
+	@mkdir -p $(BUILD_DIR_MIN)
+	PYTHONPATH=$(PYTHONPATH) $(AION_MIN) run \
+		$(AION_MIN_INPUT) \
+		--gates $(AION_MIN_GATES) \
+		--mode $(AION_MIN_MODE) \
+		--verify \
+		-o $(AION_MIN_OUTPUT)
+
+aion-minimizer-verify-spice: ## Minimize and run aion-char-verify-spice on the result (requires CELL=...)
+	@mkdir -p $(BUILD_DIR_MIN)
+ifndef CELL
+	$(error CELL is required. Use: make aion-minimizer-verify-spice CELL=<existing_aion_cell_name>)
+endif
+	$(MAKE) --no-print-directory aion-char-verify-spice \
+		CELL=$(CELL) \
+		SPICE=$(AION_MIN_OUTPUT)
+
+aion-minimizer-clean: ## Remove aion_minimizer build outputs
+	rm -rf $(BUILD_DIR_MIN)
+
+# ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 aion-opt-clean: ## Remove aion_opt build outputs
@@ -282,3 +317,6 @@ clean_aion_opt: ## Alias for aion-opt-clean
 
 clean_aion_char: ## Alias for aion-char-clean
 	$(MAKE) aion-char-clean
+
+clean_aion_minimizer: ## Alias for aion-minimizer-clean
+	$(MAKE) aion-minimizer-clean

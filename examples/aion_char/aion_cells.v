@@ -475,3 +475,26 @@ module AION_nand2_nand2b_nand3_15 ( I0, I1, I2, I3, I4, O0, O1);
     .A(I4),    .B(w0),    .Y(O1)  );
 
 endmodule
+
+module AION_inv_nand2_nor2_16 ( I0, I1, I2, O0);
+
+  input I0;
+  wire I0;
+  input I1;
+  wire I1;
+  input I2;
+  wire I2;
+  output O0;
+  wire O0;
+
+  wire w0;
+  wire w1;
+
+  sg13g2_inv_1 g0 (
+    .A(I0),    .Y(w0)  );
+  sg13g2_nand2_1 g1 (
+    .A(w0),    .B(I1),    .Y(w1)  );
+    sg13g2_nor2_1 g2 (
+    .A(w1),    .B(I2),    .Y(O0)  );
+
+endmodule

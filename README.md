@@ -43,12 +43,16 @@ make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml BUILD_DIR=build/pm3
 | `make aion-char-spice` | Run SPICE testbenches |
 | `make aion-char-all` | Run SV + SPICE testbenches |
 | `make aion-char-lib` | Characterize a cell into Liberty `.lib` files |
+| `make aion-char-verify-spice` | Verify a custom SPICE netlist for a cell |
 | `make aion-char-clean` | Remove aion_char build outputs |
+| `make aion-minimizer-run` | Minimize a gate-level SPICE netlist |
+| `make aion-minimizer-verify-spice CELL=...` | Minimize and verify with aion_char SPICE |
+| `make aion-minimizer-clean` | Remove aion_minimizer build outputs |
 | `make clean` | Remove all build outputs |
 
 ## Flow overview
 
-AION Flow is split into two tools. Each has its own directory, Makefile targets, and README with full usage details.
+AION Flow is split into three tools. Each has its own directory, Makefile targets, and README with full usage details.
 
 ### Cluster extraction — `aion_opt`
 
@@ -61,3 +65,9 @@ See [`tools/aion_opt/README.md`](tools/aion_opt/README.md) for commands, configu
 The `aion_char` tool (under `tools/aion_char/`) validates the AION cells produced by `aion_opt` with exhaustive testbenches and characterizes them into Liberty libraries.
 
 See [`tools/aion_char/README.md`](tools/aion_char/README.md) for commands and configuration flags.
+
+### Gate-level SPICE minimization — `aion_minimizer`
+
+The `aion_minimizer` tool (under `tools/aion_minimizer/`) takes a small gate-level SPICE netlist and merges the gate instances into a single optimized transistor-level SPICE netlist. It can also feed the result into `aion_char` for SPICE verification.
+
+See [`tools/aion_minimizer/README.md`](tools/aion_minimizer/README.md) for commands and configuration flags.

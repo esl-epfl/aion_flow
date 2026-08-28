@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aion-minimizer"
+version = "0.1.0"
+description = "Gate-level SPICE netlist minimizer for AION Flow."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sympy",
+    "networkx",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aion_minimizer*"]
+
+[project.scripts]
+aion-minimizer = "aion_minimizer.cli:main"

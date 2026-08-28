@@ -1,0 +1,5 @@
+.subckt AION_a21o_and2_xor2 I0 I1 I2 I3 I4 O0 O1 O2 VDD VSS
+Xg0 O0 I0 I1 VDD VSS sg13g2_and2_1
+Xg1 O1 I2 O0 O2 VDD VSS sg13g2_a21o_1
+Xg2 O2 I3 I4 VDD VSS sg13g2_xor2_1
+.ends

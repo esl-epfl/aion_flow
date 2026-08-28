@@ -1,0 +1,5 @@
+.subckt AION_inv_nand2_nor2 I0 I1 I2 O0 VDD VSS
+Xg0 net1 I0 VDD VSS sg13g2_inv_1
+Xg2 net2 net1 I1 VDD VSS sg13g2_nand2_1
+Xg1 O0 net2 I2 VDD VSS sg13g2_nor2_1
+.ends

@@ -1085,6 +1085,7 @@ all: ## Run every testbench with both simulators
 
 DISPLAY ?= :1
 TB      ?= @EXAMPLETB@
+VIEWER  ?= surfer
 
 # TBS=$(TB) so that opening one waveform builds that one testbench, not all of them.
 check-tb:
@@ -1093,10 +1094,10 @@ check-tb:
 \t\t     exit 1; }
 .PHONY: check-tb
 
-wave: check-tb ## Simulate with VCD and open one in GTKWave (usage: make wave TB=<tb_name>)
+wave: check-tb ## Simulate with VCD and open one in a waveform viewer (usage: make wave TB=<tb_name> [VIEWER=gtkwave|surfer])
 \t@[ -f $(BUILD)/icarus/$(TB).vcd ] || \\
 \t\t$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) icarus VCD=1 TBS=$(TB)
-\tDISPLAY=$(DISPLAY) gtkwave $(BUILD)/icarus/$(TB).vcd
+\tDISPLAY=$(DISPLAY) $(VIEWER) $(BUILD)/icarus/$(TB).vcd
 .PHONY: wave
 
 clean: ## Remove simulator build products
@@ -1146,6 +1147,7 @@ NGSPICE_FLAGS ?= -b
 RAW2VCD ?= @RAW2VCD@
 DISPLAY ?= :1
 TB      ?= @EXAMPLETB@
+VIEWER  ?= surfer
 
 TBS := \\
 @TBLIST@
@@ -1196,10 +1198,10 @@ plot: check-tb ## Open the analog waveforms in ngspice's own plotter (usage: mak
 \tcd $(MAKEFILE_DIR) && DISPLAY=$(DISPLAY) $(NGSPICE) -i $(TB).plot.spice
 .PHONY: plot
 
-wave: check-tb ## Simulate with VCD and open one in GTKWave (usage: make wave TB=<tb_name>)
+wave: check-tb ## Simulate with VCD and open one in a waveform viewer (usage: make wave TB=<tb_name> [VIEWER=gtkwave|surfer])
 \t@[ -f $(BUILD)/$(TB).vcd ] || \\
 \t\t$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) spice VCD=1 TBS=$(TB)
-\tDISPLAY=$(DISPLAY) gtkwave $(BUILD)/$(TB).vcd
+\tDISPLAY=$(DISPLAY) $(VIEWER) $(BUILD)/$(TB).vcd
 .PHONY: wave
 
 clean: ## Remove simulation logs, rawfiles and VCDs

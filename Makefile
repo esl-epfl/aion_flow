@@ -8,14 +8,16 @@
 
 include scripts/utils.mk
 
+REPO_ROOT := $(realpath .)
+
 .PHONY: aion-opt-graph2verilog aion-opt-generate-cells aion-opt-rewrite \
         aion-opt-run-all aion-opt-lec aion-opt-sec aion-opt-clean \
         aion-char-generate aion-char-verilator aion-char-icarus aion-char-sv \
         aion-char-spice aion-char-all aion-char-plot aion-char-wave-sv \
         aion-char-wave-spice aion-char-lib aion-char-lib-selfcheck \
-        aion-char-lib-template aion-char-clean aion-char-clean-tb \
-        aion-char-clean-lib aion-char-clean-build \
-        clean clean_aion_opt clean_aion_char
+        aion-char-lib-template aion-char-cells aion-char-verify-spice \
+        aion-char-clean aion-char-clean-tb aion-char-clean-lib \
+        aion-char-clean-build clean clean_aion_opt clean_aion_char
 
 # ---------------------------------------------------------------------------
 # Directories
@@ -31,6 +33,7 @@ AION_OPT_DIR      := tools/aion_opt
 # shared Docker runner when called from the host.
 AION_CHAR_DOCKER_PREFIX := $(if $(filter 1,$(AION_IN_DOCKER)),,./scripts/docker_run.sh ")
 AION_CHAR_DOCKER_SUFFIX := $(if $(filter 1,$(AION_IN_DOCKER)),,")
+
 AION_CHAR_DIR     := tools/aion_char
 PYTHONPATH        := $(AION_OPT_DIR):$(AION_CHAR_DIR):$(PYTHONPATH)
 AION_OPT          := python3 -m aion_opt
@@ -42,6 +45,12 @@ VERIFY_SCRIPT     := scripts/verify/run_lec_sec.py
 INPUT             ?= examples/aion_opt/pm32.nl.v
 TOP               ?= pm32
 CELL_LIB          ?= tech/tech_dict/sg13g2_stdcell.json
+AION_CHAR_NETLIST ?= $(REPO_ROOT)/examples/aion_char/aion_cells.v
+
+# Convert host paths that are passed into the Docker container to the
+# container-side mount point (/foss/designs/aion_flow/...).
+AION_CHAR_NETLIST_ABS    := $(abspath $(AION_CHAR_NETLIST))
+AION_CHAR_NETLIST_DOCKER := $(if $(filter 1,$(AION_IN_DOCKER)),$(AION_CHAR_NETLIST),$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(AION_CHAR_NETLIST_ABS)))
 
 # ---------------------------------------------------------------------------
 # Mining parameters
@@ -156,56 +165,93 @@ aion-opt-sec: ## Run sequential equivalence check (SEC)
 # ---------------------------------------------------------------------------
 # aion_char subcommands
 # ---------------------------------------------------------------------------
+# Forward common aion_char variables into the sub-make. These are passed for every
+# target so users can override LIB, CELL_V, CELL_SP, MODEL_LIB, VDD, MODULE, CUSTOM,
+# RAW2VCD, TB, VIEWER, and characterization knobs from the repo root.
+AION_CHAR_VARS := \
+	BUILD_DIR_CHAR=$(BUILD_DIR_CHAR) \
+	NETLIST=$(AION_CHAR_NETLIST_DOCKER) \
+	$(if $(LIB),LIB=$(LIB)) \
+	$(if $(CELL_V),CELL_V="$(CELL_V)") \
+	$(if $(CELL_SP),CELL_SP=$(CELL_SP)) \
+	$(if $(MODEL_LIB),MODEL_LIB=$(MODEL_LIB)) \
+	$(if $(MODEL_SECTION),MODEL_SECTION=$(MODEL_SECTION)) \
+	$(if $(VDD),VDD=$(VDD)) \
+	$(if $(MODULE),MODULE=$(MODULE)) \
+	$(if $(CUSTOM),CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(CUSTOM)))) \
+	$(if $(RAW2VCD),RAW2VCD=$(RAW2VCD)) \
+	$(if $(TB),TB=$(TB)) \
+	$(if $(VIEWER),VIEWER=$(VIEWER)) \
+	$(if $(CORNERS),CORNERS="$(CORNERS)") \
+	$(if $(SLEWS),SLEWS="$(SLEWS)") \
+	$(if $(LOADS),LOADS="$(LOADS)") \
+	$(if $(JOBS),JOBS=$(JOBS)) \
+	$(if $(AREA),AREA=$(AREA)) \
+	$(if $(DRIVER),DRIVER=$(DRIVER)) \
+	$(if $(DRIVER_IN),DRIVER_IN=$(DRIVER_IN)) \
+	$(if $(DRIVER_OUT),DRIVER_OUT=$(DRIVER_OUT)) \
+	$(if $(VERIFY),VERIFY=$(VERIFY)) \
+	$(if $(KEEP),KEEP=$(KEEP))
+
 aion-char-generate: ## Generate aion_char SV/SPICE testbenches
 	@mkdir -p $(BUILD_DIR_CHAR)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) generate \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-verilator: ## Run aion_char Verilator testbenches
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) verilator \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-icarus: ## Run aion_char Icarus testbenches
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) icarus \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-sv: ## Run aion_char SystemVerilog testbenches
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) sv \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-spice: ## Run aion_char SPICE testbenches
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) spice \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-all: ## Run aion_char SV + SPICE testbenches
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) all \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-plot: ## Plot aion_char SPICE waveforms (TB=tb_<module>)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) plot \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
-aion-char-wave-sv: ## View aion_char SV waveforms in GTKWave (TB=tb_<module>)
+aion-char-wave-sv: ## View aion_char SV waveforms (TB=tb_<module>, VIEWER=surfer|gtkwave)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) wave-sv \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
-aion-char-wave-spice: ## View aion_char SPICE waveforms in GTKWave (TB=tb_<module>)
+aion-char-wave-spice: ## View aion_char SPICE waveforms (TB=tb_<module>, VIEWER=surfer|gtkwave)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) wave-spice \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-lib: ## Characterize a cell into Liberty .lib files
 	@mkdir -p $(BUILD_DIR_CHAR)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) lib \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-lib-selfcheck: ## Self-check characterization against PDK .lib
 	@mkdir -p $(BUILD_DIR_CHAR)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) lib-selfcheck \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
 
 aion-char-lib-template: ## Print the Liberty template
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) lib-template \
-		BUILD_DIR_CHAR=$(BUILD_DIR_CHAR)$(AION_CHAR_DOCKER_SUFFIX)
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
+
+aion-char-cells: ## Show the AION cell Verilog path and list available cells
+	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) cells \
+		$(AION_CHAR_VARS)$(AION_CHAR_DOCKER_SUFFIX)
+
+aion-char-verify-spice: ## Verify a custom SPICE netlist for CELL (CELL=..., SPICE=...)
+	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) verify-spice \
+		$(AION_CHAR_VARS) \
+		MODULE=$(CELL) CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(SPICE)))$(AION_CHAR_DOCKER_SUFFIX)
 
 # ---------------------------------------------------------------------------
 # Clean

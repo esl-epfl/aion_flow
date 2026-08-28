@@ -44,7 +44,7 @@ VDD           ?= 1.2
 AION_CHAR_DIR := $(MAKEFILE_DIR)
 PYTHONPATH    := $(AION_CHAR_DIR):$(PYTHONPATH)
 
-NETLIST       ?= $(MAKEFILE_DIR)aion_cells.v
+NETLIST       ?= $(REPO_ROOT)/examples/aion_char/aion_cells.v
 TB_DIR        ?= $(_BUILD_DIR_CHAR_ABS)/tb
 LIB_DIR       ?= $(_BUILD_DIR_CHAR_ABS)/lib
 SELFCHECK_DIR ?= $(_BUILD_DIR_CHAR_ABS)/lib-selfcheck
@@ -53,7 +53,7 @@ GEN      := cd $(REPO_ROOT) && PYTHONPATH=$(PYTHONPATH) python3 -m aion_char gen
 GEN_LIB  := cd $(REPO_ROOT) && PYTHONPATH=$(PYTHONPATH) python3 -m aion_char lib
 
 # Optional raw-to-VCD converter for SPICE VCD output.
-RAW2VCD  ?=
+RAW2VCD  ?= $(REPO_ROOT)/scripts/raw2vcd.py
 
 # Optional custom SPICE netlist and module restriction.
 CUSTOM   ?=
@@ -217,6 +217,29 @@ lib-selfcheck: ## Characterize a PDK cell and diff against the PDK's own .lib
 lib-template: ## Print the Liberty template used to build the libraries
 	@cd $(REPO_ROOT) && PYTHONPATH=$(PYTHONPATH) python3 -m aion_char lib --template $(LIB_TMPL) --print-template
 .PHONY: lib-template
+
+cells: ## Show the cell Verilog path and list the AION modules it contains
+	@echo "AION cell Verilog: $(NETLIST)"
+	@if [ -f "$(NETLIST)" ]; then \
+		grep -E '^\s*module\s+AION_' "$(NETLIST)" | \
+			sed -E 's/^\s*module\s+([^ (]+).*/  - \1/' | sort; \
+	else \
+		echo "  (file not found)"; \
+	fi
+.PHONY: cells
+
+verify-spice: ## Verify a custom SPICE netlist for one cell (MODULE=..., CUSTOM=...)
+	@if [ -z "$(MODULE)" ]; then \
+		echo "Error: MODULE is required (e.g., MODULE=AION_nand2_11)" >&2; exit 1; \
+	fi
+	@if [ -z "$(CUSTOM)" ]; then \
+		echo "Error: CUSTOM is required (path to the custom SPICE netlist)" >&2; exit 1; \
+	fi
+	@if [ ! -f "$(CUSTOM)" ]; then \
+		echo "Error: custom SPICE netlist not found: $(CUSTOM)" >&2; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) spice MODULE=$(MODULE) CUSTOM=$(CUSTOM)
+.PHONY: verify-spice
 
 # ---------------------------------------------------------------------------
 # Clean

@@ -34,12 +34,17 @@ Everything runs inside the EDA container — the PDK, cell models, and device mo
 | `make aion-char-spice` | Run transistor-level SPICE testbenches |
 | `make aion-char-all` | `sv` + `spice` |
 | `make aion-char-plot` | Plot SPICE waveforms (`TB=tb_<module>`) |
-| `make aion-char-wave-sv` | Open SV waveform in GTKWave (`TB=tb_<module>`) |
-| `make aion-char-wave-spice` | Open SPICE waveform in GTKWave (`TB=tb_<module>`) |
+| `make aion-char-wave-sv` | Open SV waveform in Surfer (`TB=tb_<module>`, `VIEWER=gtkwave` for GTKWave) |
+| `make aion-char-wave-spice` | Open SPICE waveform in Surfer (`TB=tb_<module>`, `VIEWER=gtkwave` for GTKWave) |
 | `make aion-char-lib` | Characterize a cell into `.lib` per corner |
 | `make aion-char-lib-selfcheck` | Characterize a PDK cell and diff against its own `.lib` |
 | `make aion-char-lib-template` | Print the Liberty template |
+| `make aion-char-cells` | Show the AION cell Verilog path and list available cells |
+| `make aion-char-verify-spice` | Verify a custom SPICE netlist for one cell (`MODULE=...`, `SPICE=...`) |
 | `make aion-char-clean` | Remove all `build/aion_char/` outputs |
+| `make aion-char-clean-tb` | Remove only generated testbenches |
+| `make aion-char-clean-lib` | Remove only generated Liberty libraries |
+| `make aion-char-clean-build` | Remove only simulator build products |
 
 ## Configuration
 
@@ -47,20 +52,46 @@ Everything runs inside the EDA container — the PDK, cell models, and device mo
 |----------|---------|-------------|
 | `BUILD_DIR` | `build` | Root build directory |
 | `BUILD_DIR_CHAR` | `$(BUILD_DIR)/aion_char` | Output directory for `aion_char` |
-| `NETLIST` | `tools/aion_char/aion_cells.v` | Netlist under test |
+| `NETLIST` | `examples/aion_char/aion_cells.v` | Netlist under test |
 | `LIB` | `.../sg13g2_stdcell_typ_1p20V_25C.lib` | Liberty oracle |
 | `CELL_V` | PDK Verilog models | Standard-cell Verilog models |
 | `CELL_SP` | PDK SPICE netlist | Standard-cell SPICE subcircuits |
 | `MODEL_LIB` | PDK corner MOS lib | ngspice device-model library |
-| `MODULE` | — | Restrict to one or more cell names |
+| `MODEL_SECTION` | `mos_tt` | Corner section in `MODEL_LIB` |
+| `VDD` | `1.2` | Supply voltage |
+| `MODULE` | — | Restrict generation/simulation to one or more cell names |
 | `CUSTOM` | — | Additional custom SPICE netlist for comparison |
+| `CELL` | — | Cell name for `aion-char-verify-spice` |
+| `SPICE` | — | Custom SPICE netlist path for `aion-char-verify-spice` |
+| `VIEWER` | `surfer` | Waveform viewer for `wave-sv`/`wave-spice` (`gtkwave` or `surfer`) |
+| `RAW2VCD` | `scripts/raw2vcd.py` | rawfile-to-VCD converter |
+| `CORNERS` | `typ:... slow:... fast:...` | Characterization corners |
+| `SLEWS` | 7 values | Input slews for characterization |
+| `LOADS` | 7 values | Output loads for characterization |
+| `JOBS` | `8` | Parallel jobs for characterization |
+| `AREA` | — | Cell area override for `.lib` |
+| `DRIVER` / `DRIVER_IN` / `DRIVER_OUT` | — | Optional driver cell for characterization |
+| `VERIFY` | `1` | Set to `0` to skip Liberty verification |
+| `KEEP` | `0` | Set to `1` to keep ngspice decks |
+| `AION_IN_DOCKER` | `0` | Set to `1` when already inside the EDA container |
 
-### Worked example
+### Worked examples
 
 A bare-transistor AION NAND2 example is provided under `examples/aion_char/`:
 
 ```bash
+# Characterize AION_nand2_11 from the example SPICE netlist
 ./scripts/docker_run.sh "make aion-char-lib"
 ```
 
-This characterizes `AION_nand2_11` from `examples/aion_char/aion_nand2_11_flat.spice`.
+Verify a custom SPICE netlist against the generated testbench for a specific cell:
+
+```bash
+./scripts/docker_run.sh "make aion-char-verify-spice CELL=AION_nand2_11 SPICE=examples/aion_char/aion_nand2_11_flat.spice"
+```
+
+List the cells available in the current netlist:
+
+```bash
+make aion-char-cells
+```

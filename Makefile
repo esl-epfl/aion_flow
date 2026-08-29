@@ -18,6 +18,7 @@ REPO_ROOT := $(realpath .)
         aion-char-lib-template aion-char-cells aion-char-verify-spice \
         aion-char-clean aion-char-clean-tb aion-char-clean-lib \
         aion-char-clean-build \
+        split-spice-cells merge-spice-cells run-aion-minimizer-batch \
         aion-minimizer-run aion-minimizer-verify-spice aion-minimizer-clean \
         clean clean_aion_opt clean_aion_char clean_aion_minimizer
 
@@ -62,6 +63,11 @@ AION_MIN_MODE     ?= transistor
 # container-side mount point (/foss/designs/aion_flow/...).
 AION_CHAR_NETLIST_ABS    := $(abspath $(AION_CHAR_NETLIST))
 AION_CHAR_NETLIST_DOCKER := $(if $(filter 1,$(AION_IN_DOCKER)),$(AION_CHAR_NETLIST),$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(AION_CHAR_NETLIST_ABS)))
+
+# Allow NETLIST=... to override AION_CHAR_NETLIST when invoked from the flow.
+AION_CHAR_NETLIST_FINAL  := $(if $(NETLIST),$(NETLIST),$(AION_CHAR_NETLIST))
+AION_CHAR_NETLIST_FINAL_ABS    := $(abspath $(AION_CHAR_NETLIST_FINAL))
+AION_CHAR_NETLIST_FINAL_DOCKER := $(if $(filter 1,$(AION_IN_DOCKER)),$(AION_CHAR_NETLIST_FINAL),$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(AION_CHAR_NETLIST_FINAL_ABS)))
 
 # ---------------------------------------------------------------------------
 # Mining parameters
@@ -185,7 +191,7 @@ aion-opt-sec: ## Run sequential equivalence check (SEC)
 # RAW2VCD, TB, VIEWER, and characterization knobs from the repo root.
 AION_CHAR_VARS := \
 	BUILD_DIR_CHAR=$(BUILD_DIR_CHAR) \
-	NETLIST=$(AION_CHAR_NETLIST_DOCKER) \
+	NETLIST=$(AION_CHAR_NETLIST_FINAL_DOCKER) \
 	$(if $(LIB),LIB=$(LIB)) \
 	$(if $(CELL_V),CELL_V="$(CELL_V)") \
 	$(if $(CELL_SP),CELL_SP=$(CELL_SP)) \
@@ -266,7 +272,42 @@ aion-char-cells: ## Show the AION cell Verilog path and list available cells
 aion-char-verify-spice: ## Verify a custom SPICE netlist for CELL (CELL=..., SPICE=...)
 	$(AION_CHAR_DOCKER_PREFIX)$(MAKE) --no-print-directory -C $(AION_CHAR_DIR) verify-spice \
 		$(AION_CHAR_VARS) \
+		NETLIST=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(NETLIST))) \
 		MODULE=$(CELL) CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(SPICE)))$(AION_CHAR_DOCKER_SUFFIX)
+
+# ---------------------------------------------------------------------------
+# SPICE split / merge helper
+# ---------------------------------------------------------------------------
+SPLIT_MERGE_SCRIPT := scripts/spice_split_merge.py
+
+split-spice-cells: ## Split a SPICE file into one file per .subckt cell (INPUT=..., OUTPUT=...)
+	@mkdir -p $(OUTPUT)
+	python3 $(SPLIT_MERGE_SCRIPT) merge $(INPUT) -o $(OUTPUT)
+
+merge-spice-cells: ## Merge SPICE files or a directory into one file (INPUTS=..., OUTPUT=...)
+	@mkdir -p $(dir $(OUTPUT))
+	python3 $(SPLIT_MERGE_SCRIPT) split $(INPUTS) -o $(OUTPUT)
+
+# ---------------------------------------------------------------------------
+# aion_minimizer batch helper
+# ---------------------------------------------------------------------------
+MINIMIZER_BATCH_SCRIPT := scripts/run_aion_minimizer_batch.py
+
+run-aion-minimizer-batch: ## Batch-minimize SPICE cells (INPUT_DIR=..., OUTPUT_DIR=..., GATES=...)
+	@mkdir -p $(OUTPUT_DIR)
+	PYTHONPATH=$(PYTHONPATH) python3 $(MINIMIZER_BATCH_SCRIPT) \
+		$(INPUT_DIR) $(OUTPUT_DIR) \
+		$(addprefix --gates ,$(GATES)) \
+		$(if $(MODE),--mode $(MODE),) \
+		$(if $(WN),--wn $(WN),) \
+		$(if $(WP),--wp $(WP),) \
+		$(if $(L),--l $(L),) \
+		$(if $(MAX_INPUTS),--max-inputs $(MAX_INPUTS),) \
+		$(if $(VERIFY),--verify,) \
+		$(if $(VERIFY_SPICE),--verify-spice,) \
+		$(if $(NETLIST),--netlist $(NETLIST),) \
+		$(if $(BUILD_DIR),--build-dir $(BUILD_DIR),) \
+		$(if $(filter 0,$(AION_IN_DOCKER)),--docker-runner ./scripts/docker_run.sh,)
 
 # ---------------------------------------------------------------------------
 # aion_minimizer subcommands
@@ -280,14 +321,16 @@ aion-minimizer-run: ## Minimize a gate-level SPICE netlist into a transistor-lev
 		--verify \
 		-o $(AION_MIN_OUTPUT)
 
-aion-minimizer-verify-spice: ## Minimize and run aion-char-verify-spice on the result (requires CELL=...)
-	@mkdir -p $(BUILD_DIR_MIN)
+aion-minimizer-verify-spice: ## Run aion-char-verify-spice on a minimized cell (requires CELL=..., SPICE=...)
 ifndef CELL
 	$(error CELL is required. Use: make aion-minimizer-verify-spice CELL=<existing_aion_cell_name>)
 endif
+ifndef SPICE
+	$(error SPICE is required. Use: make aion-minimizer-verify-spice CELL=... SPICE=...)
+endif
 	$(MAKE) --no-print-directory aion-char-verify-spice \
 		CELL=$(CELL) \
-		SPICE=$(AION_MIN_OUTPUT)
+		SPICE=$(SPICE)
 
 aion-minimizer-clean: ## Remove aion_minimizer build outputs
 	rm -rf $(BUILD_DIR_MIN)

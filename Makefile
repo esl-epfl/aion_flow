@@ -2,7 +2,7 @@
 #  SPDX-FileCopyrightText:    2026 Filippo Quadri
 #  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
 #  Created:                   2026-08-27 16:19:43
-#  Updated:                   2026-08-28 18:25:05
+#  Updated:                   2026-08-29 15:57:04
 #  Description:               AION Flow - Makefile
 # ================================================================
 
@@ -324,3 +324,6 @@ clean_aion_char: ## Alias for aion-char-clean
 
 clean_aion_minimizer: ## Alias for aion-minimizer-clean
 	$(MAKE) aion-minimizer-clean
+
+flow: ## Run the full flow
+	python examples/full_flow/flow.py

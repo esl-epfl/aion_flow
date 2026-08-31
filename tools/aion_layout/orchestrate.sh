@@ -18,6 +18,7 @@ source "${SCRIPT_DIR}/pipeline.sh"
 SPICE_NETLIST="${1:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERATIONS]}"
 BUILD_DIR="${2:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERATIONS]}"
 MAX_ITERATIONS="${3:-10}"
+# MODEL="${MODEL:-openai/gpt-oss-120b}"
 MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B}"
 
 COPILOT_RCP="${COPILOT_RCP:-/home/filippoquadri/phd/aion/copilot-rcp.sh}"
@@ -158,6 +159,18 @@ you can find the drc rules here: @context:drc:
 
 YOU SHOULD FOCUS FIRST ON LVS FAILURES, THEN DRC FAILURES, THEN OTHER ISSUES.
 
+You can iterate at maximum 5 times in a session by running drc and lvs (work in a internal_iteration folder inside the main iteration folder)
+
+To generate the gds, run
+./scripts/docker_run.sh "cd tools/aion_layout && PYTHONPATH=/foss/designs/aion_flow/tools/aion_layout python3 scripts/generate_cell.py <MODULE> <OUTPUT_GDS>"
+
+To run the DRC, run
+./scripts/docker_run.sh "cd tools/aion_layout && sak-drc.sh -d -b -l macro -w <DRC_RUN_DIR> <GDS_FILE>"
+
+To run the LVS, run
+./scripts/docker_run.sh "cd tools/aion_layout && sak-lvs.sh -d -b -w <LVS_RUN_DIR> -s <SPICE_NETLIST> -l <GDS_FILE> -c <CELL_NAME>"
+
+
 Diagnose the failure(s) using the priority order above. Make the smallest
 change that fixes the highest-priority problem — do not redesign the whole
 cell.
@@ -217,7 +230,7 @@ for ((i = 0; i < MAX_ITERATIONS; i++)); do
     [[ "$status" == "verified_clean" || "$status" == "max_iterations_reached" ]] && break
 
     n="$(state_read '.current_iteration')"
-    
+
     print_banner "\033[32m" "STARTING ITERATION ${n} / $((MAX_ITERATIONS - 1))"
 
     if [[ "$n" -eq 0 && ! -f "${BUILD_DIR}/layout/iteration_0/${CELL_NAME}.py" ]]; then

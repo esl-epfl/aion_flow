@@ -1,0 +1,80 @@
+# frozen_string_literal: true
+
+#=========================================================================================
+# Copyright 2025 IHP PDK Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#=========================================================================================
+
+if TABLES.include?('schottkydiode') || FEOL
+  #================================================
+  #------------------ 6.7 Schottky diode ----------
+  #================================================
+
+  logger.info('Starting 6.7 Schottky diode table')
+
+  unless PRECHECK_DRC
+    # Schottky diode derivations
+    schottky_contbar = contbar.and(schottky_nbl_rec)
+    schottky_nsd_block = nsd_block.and(schottky_nbl1)
+    schottky_salblock = salblock_drw.and(schottky_nbl1)
+
+    # Rule Sdiod.b: Min. and max. nSD:block enclosure of ContBar is 0.40 um
+    logger.info('Executing rule Sdiod.b')
+    sdiod_b_value = drc_rules['Sdiod_b'].to_f
+    sdiod_b_contbar_sized = schottky_contbar.sized(sdiod_b_value.um)
+    # Min enclosure side: catch ContBar not enclosed by at least the target value.
+    sdiod_b_l1 = schottky_contbar.enclosed(schottky_nsd_block, sdiod_b_value.um, euclidian).polygons
+    # Max enclosure side: catch nSD:block extensions beyond the expected ContBar + enclosure.
+    sdiod_b_l2 = schottky_nsd_block.interacting(schottky_contbar).not(sdiod_b_contbar_sized)
+    sdiod_b_l = sdiod_b_l1.join(sdiod_b_l2)
+    sdiod_b_l.output('Sdiod.b', "6.7. Sdiod.b : Min. and max. nSD:block enclosure of ContBar = #{sdiod_b_value} um")
+    sdiod_b_contbar_sized.forget
+    sdiod_b_l1.forget
+    sdiod_b_l2.forget
+    sdiod_b_l.forget
+
+    # Rule Sdiod.c: Min. and max. SalBlock enclosure of ContBar is 0.45 um
+    logger.info('Executing rule Sdiod.c')
+    sdiod_c_value = drc_rules['Sdiod_c'].to_f
+    sdiod_c_contbar_sized = schottky_contbar.sized(sdiod_c_value.um)
+    # Min enclosure side: catch ContBar not enclosed by at least the target value.
+    sdiod_c_l1 = schottky_contbar.enclosed(schottky_salblock, sdiod_c_value.um, euclidian).polygons
+    # Max enclosure side: catch SalBlock extensions beyond the expected ContBar + enclosure.
+    sdiod_c_l2 = schottky_salblock.interacting(schottky_contbar).not(sdiod_c_contbar_sized)
+    sdiod_c_l = sdiod_c_l1.join(sdiod_c_l2)
+    sdiod_c_l.output('Sdiod.c', "6.7. Sdiod.c : Min. and max. SalBlock enclosure of ContBar = #{sdiod_c_value} um")
+    sdiod_c_contbar_sized.forget
+    sdiod_c_l1.forget
+    sdiod_c_l2.forget
+    sdiod_c_l.forget
+
+    # Rule Sdiod.d: Min. and max. ContBar width inside nBuLay is 0.30 um
+    logger.info('Executing rule Sdiod.d')
+    sdiod_d_value = drc_rules['Sdiod_d'].to_f
+    sdiod_d_l = schottky_contbar.without_bbox_min(sdiod_d_value.um)
+    sdiod_d_l.output('Sdiod.d', "6.7. Sdiod.d : Min. and max. ContBar width inside nBuLay is #{sdiod_d_value} um")
+    sdiod_d_l.forget
+
+    # Rule Sdiod.e: Min. and max. ContBar length inside nBuLay is 1.00 um
+    logger.info('Executing rule Sdiod.e')
+    sdiod_e_value = drc_rules['Sdiod_e'].to_f
+    sdiod_e_l = schottky_contbar.without_bbox_max(sdiod_e_value.um)
+    sdiod_e_l.output('Sdiod.e', "6.7. Sdiod.e : Min. and max. ContBar length inside nBuLay is #{sdiod_e_value} um")
+    sdiod_e_l.forget
+
+    schottky_nsd_block.forget
+    schottky_salblock.forget
+    schottky_contbar.forget
+  end
+end

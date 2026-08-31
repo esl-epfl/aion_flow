@@ -1,0 +1,24 @@
+# ================================================================
+#  SPDX-FileCopyrightText:    2026 Filippo Quadri
+#  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
+#  Created:                   2026-08-25
+#  Description:               Python project metadata for aion_layout
+# ================================================================
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aion_layout"
+version = "0.1.0"
+description = "Technology-aware standard-cell layout tool for IHP SG13G2"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "klayout>=0.29.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aion_layout*", "cells*"]

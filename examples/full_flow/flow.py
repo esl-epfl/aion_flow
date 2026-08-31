@@ -21,11 +21,11 @@ from util import PrintSectionName, Step, Style, banner, color, run_step
 # Flow Variables
 # =============================================================================
 # General
-# TOP = "pm32"
-# INPUT_NETLIST = Path("examples/aion_opt/pm32.nl.v")
+TOP = "pm32"
+INPUT_NETLIST = Path("examples/aion_opt/pm32.nl.v")
 
-TOP = "netlist"
-INPUT_NETLIST = Path("examples/full_flow/netlist.v")
+# TOP = "netlist"
+# INPUT_NETLIST = Path("examples/full_flow/netlist.v")
 
 BUILD_DIR = Path("build/full_flow")
 BUILD_DIR_STEPS = BUILD_DIR / "steps"

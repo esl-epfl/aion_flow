@@ -1,0 +1,207 @@
+# ================================================================
+#  SPDX-FileCopyrightText:    2026 Filippo Quadri
+#  SPDX-License-Identifier:   Apache-2.0 WITH SHL-2.1
+#  Created:                   2026-08-25
+#  Description:               Auto-generated from GDS: sg13g2_mux4_1
+# ================================================================
+
+"""Generated AION cell for sg13g2_mux4_1."""
+
+from aion_layout.cell import Cell, Port
+from aion_layout.primitives import Point, Rect
+from aion_layout.shapes import PolygonShape, RectShape, TextShape
+from aion_layout.tech import Tech
+
+CELL_WIDTH = 10080.0
+CELL_HEIGHT = 3780.0
+
+
+def generate(name: str, tech: Tech) -> Cell:
+    """Generate the cell."""
+    cell = Cell(name, tech)
+    cell.set_boundary(Rect.from_lbrt(0.0, 0.0, 10080.0, 3780.0))
+
+    # Activ
+    cell.add_shape(PolygonShape(tech['Activ'], [Point(9160.0, 2060.0), Point(9160.0, 2155.0), Point(8290.0, 2155.0), Point(8290.0, 3155.0), Point(9090.0, 3155.0), Point(9090.0, 3180.0), Point(9885.0, 3180.0), Point(9885.0, 2060.0)]))
+    cell.add_shape(PolygonShape(tech['Activ'], [Point(9125.0, 640.0), Point(9125.0, 740.0), Point(8465.0, 740.0), Point(8465.0, 1380.0), Point(9865.0, 1380.0), Point(9865.0, 640.0)]))
+    cell.add_shape(PolygonShape(tech['Activ'], [Point(6095.0, 390.0), Point(6095.0, 1145.0), Point(6510.0, 1145.0), Point(6510.0, 1440.0), Point(7735.0, 1440.0), Point(7735.0, 800.0), Point(6685.0, 800.0), Point(6685.0, 390.0)]))
+    cell.add_shape(PolygonShape(tech['Activ'], [Point(1080.0, 1925.0), Point(1080.0, 2060.0), Point(455.0, 2060.0), Point(455.0, 3060.0), Point(1275.0, 3060.0), Point(1275.0, 2925.0), Point(3500.0, 2925.0), Point(3500.0, 3210.0), Point(3800.0, 3210.0), Point(3800.0, 2925.0), Point(4125.0, 2925.0), Point(4125.0, 3155.0), Point(6285.0, 3155.0), Point(6285.0, 2155.0), Point(4300.0, 2155.0), Point(4300.0, 1925.0)]))
+    cell.add_shape(RectShape(tech['Activ'], Rect.from_lbrt(0.0, -150.0, 10080.0, 150.0)))
+    cell.add_shape(RectShape(tech['Activ'], Rect.from_lbrt(0.0, 3630.0, 10080.0, 3930.0)))
+    cell.add_shape(RectShape(tech['Activ'], Rect.from_lbrt(6495.0, 2180.0, 7880.0, 3180.0)))
+    cell.add_shape(RectShape(tech['Activ'], Rect.from_lbrt(355.0, 590.0, 5825.0, 1230.0)))
+
+    # Cont
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9760.0, -80.0, 9920.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9760.0, 3700.0, 9920.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9655.0, 2865.0, 9815.0, 3025.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9635.0, 720.0, 9795.0, 880.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9635.0, 1150.0, 9795.0, 1310.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9280.0, -80.0, 9440.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9280.0, 3700.0, 9440.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9250.0, 1655.0, 9410.0, 1815.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9145.0, 2595.0, 9305.0, 2755.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9145.0, 2935.0, 9305.0, 3095.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9085.0, 810.0, 9245.0, 970.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(9085.0, 1150.0, 9245.0, 1310.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8800.0, -80.0, 8960.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8800.0, 3700.0, 8960.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8710.0, 1655.0, 8870.0, 1815.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8535.0, 810.0, 8695.0, 970.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8535.0, 1150.0, 8695.0, 1310.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8360.0, 2255.0, 8520.0, 2415.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8360.0, 2600.0, 8520.0, 2760.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8320.0, -80.0, 8480.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(8320.0, 3700.0, 8480.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7935.0, 1750.0, 8095.0, 1910.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7840.0, -80.0, 8000.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7840.0, 3700.0, 8000.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7650.0, 2250.0, 7810.0, 2410.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7650.0, 2600.0, 7810.0, 2760.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7505.0, 870.0, 7665.0, 1030.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7360.0, -80.0, 7520.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7360.0, 3700.0, 7520.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7095.0, 2250.0, 7255.0, 2410.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7095.0, 2600.0, 7255.0, 2760.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(7095.0, 2945.0, 7255.0, 3105.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6995.0, 1210.0, 7155.0, 1370.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6880.0, -80.0, 7040.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6880.0, 3700.0, 7040.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6565.0, 2255.0, 6725.0, 2415.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6565.0, 2605.0, 6725.0, 2765.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6565.0, 2950.0, 6725.0, 3110.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6400.0, -80.0, 6560.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6400.0, 3700.0, 6560.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6165.0, 460.0, 6325.0, 620.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6165.0, 915.0, 6325.0, 1075.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6155.0, 1685.0, 6315.0, 1845.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(6055.0, 2915.0, 6215.0, 3075.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5920.0, -80.0, 6080.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5920.0, 3700.0, 6080.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5595.0, 750.0, 5755.0, 910.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5440.0, -80.0, 5600.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5440.0, 3700.0, 5600.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5315.0, 1750.0, 5475.0, 1910.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5145.0, 2230.0, 5305.0, 2390.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(5145.0, 2710.0, 5305.0, 2870.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4960.0, -80.0, 5120.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4960.0, 3700.0, 5120.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4640.0, 2230.0, 4800.0, 2390.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4640.0, 2710.0, 4800.0, 2870.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4625.0, 660.0, 4785.0, 820.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4480.0, -80.0, 4640.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4480.0, 3700.0, 4640.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4385.0, 1425.0, 4545.0, 1585.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4000.0, -80.0, 4160.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(4000.0, 3700.0, 4160.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3845.0, 1520.0, 4005.0, 1680.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3570.0, 2980.0, 3730.0, 3140.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3560.0, 660.0, 3720.0, 820.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3520.0, -80.0, 3680.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3520.0, 3700.0, 3680.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3305.0, 1520.0, 3465.0, 1680.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3040.0, -80.0, 3200.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(3040.0, 3700.0, 3200.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2765.0, 1425.0, 2925.0, 1585.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2560.0, -80.0, 2720.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2560.0, 3700.0, 2720.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2545.0, 2005.0, 2705.0, 2165.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2545.0, 2345.0, 2705.0, 2505.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2545.0, 2685.0, 2705.0, 2845.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2100.0, 950.0, 2260.0, 1110.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2080.0, -80.0, 2240.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(2080.0, 3700.0, 2240.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1835.0, 1505.0, 1995.0, 1665.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1600.0, -80.0, 1760.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1600.0, 3700.0, 1760.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1325.0, 1520.0, 1485.0, 1680.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1120.0, -80.0, 1280.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1120.0, 3700.0, 1280.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1035.0, 660.0, 1195.0, 820.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1035.0, 2130.0, 1195.0, 2290.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1035.0, 2470.0, 1195.0, 2630.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(1035.0, 2810.0, 1195.0, 2970.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(785.0, 1520.0, 945.0, 1680.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(640.0, -80.0, 800.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(640.0, 3700.0, 800.0, 3860.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(525.0, 2130.0, 685.0, 2290.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(525.0, 2470.0, 685.0, 2630.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(525.0, 2810.0, 685.0, 2970.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(425.0, 660.0, 585.0, 820.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(425.0, 1000.0, 585.0, 1160.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(160.0, -80.0, 320.0, 80.0)))
+    cell.add_shape(RectShape(tech['Cont'], Rect.from_lbrt(160.0, 3700.0, 320.0, 3860.0)))
+
+    # GatPoly
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(1410.0, 410.0), Point(1410.0, 1435.0), Point(1240.0, 1435.0), Point(1240.0, 1765.0), Point(1345.0, 1765.0), Point(1345.0, 3105.0), Point(1475.0, 3105.0), Point(1475.0, 1765.0), Point(1570.0, 1765.0), Point(1570.0, 1435.0), Point(1540.0, 1435.0), Point(1540.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(9395.0, 460.0), Point(9395.0, 1570.0), Point(9165.0, 1570.0), Point(9165.0, 1900.0), Point(9415.0, 1900.0), Point(9415.0, 3360.0), Point(9545.0, 3360.0), Point(9545.0, 1570.0), Point(9525.0, 1570.0), Point(9525.0, 460.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(6755.0, 310.0), Point(6755.0, 1710.0), Point(6835.0, 1710.0), Point(6835.0, 3360.0), Point(6965.0, 3360.0), Point(6965.0, 1560.0), Point(6885.0, 1560.0), Point(6885.0, 440.0), Point(8825.0, 440.0), Point(8825.0, 1570.0), Point(8630.0, 1570.0), Point(8630.0, 3335.0), Point(8760.0, 3335.0), Point(8760.0, 1900.0), Point(8955.0, 1900.0), Point(8955.0, 310.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(7265.0, 620.0), Point(7265.0, 1810.0), Point(7410.0, 1810.0), Point(7410.0, 3360.0), Point(7540.0, 3360.0), Point(7540.0, 1810.0), Point(7850.0, 1810.0), Point(7850.0, 1995.0), Point(8180.0, 1995.0), Point(8180.0, 1660.0), Point(7395.0, 1660.0), Point(7395.0, 620.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(5230.0, 1665.0), Point(5230.0, 1995.0), Point(5415.0, 1995.0), Point(5415.0, 3335.0), Point(5545.0, 3335.0), Point(5545.0, 1665.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(695.0, 410.0), Point(695.0, 1435.0), Point(685.0, 1435.0), Point(685.0, 1765.0), Point(795.0, 1765.0), Point(795.0, 3425.0), Point(4530.0, 3425.0), Point(4530.0, 2060.0), Point(5020.0, 2060.0), Point(5020.0, 1455.0), Point(5115.0, 1455.0), Point(5115.0, 410.0), Point(4985.0, 410.0), Point(4985.0, 1305.0), Point(4870.0, 1305.0), Point(4870.0, 1910.0), Point(4400.0, 1910.0), Point(4400.0, 3285.0), Point(2435.0, 3285.0), Point(2435.0, 1850.0), Point(2500.0, 1850.0), Point(2500.0, 410.0), Point(2370.0, 410.0), Point(2370.0, 1305.0), Point(2305.0, 1305.0), Point(2305.0, 3285.0), Point(925.0, 3285.0), Point(925.0, 1765.0), Point(1025.0, 1765.0), Point(1025.0, 1435.0), Point(825.0, 1435.0), Point(825.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(4300.0, 410.0), Point(4300.0, 1670.0), Point(4630.0, 1670.0), Point(4630.0, 1340.0), Point(4430.0, 1340.0), Point(4430.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(3920.0, 410.0), Point(3920.0, 1435.0), Point(3760.0, 1435.0), Point(3760.0, 1765.0), Point(3895.0, 1765.0), Point(3895.0, 3105.0), Point(4025.0, 3105.0), Point(4025.0, 1765.0), Point(4090.0, 1765.0), Point(4090.0, 1435.0), Point(4050.0, 1435.0), Point(4050.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(3220.0, 410.0), Point(3220.0, 1765.0), Point(3265.0, 1765.0), Point(3265.0, 3105.0), Point(3395.0, 3105.0), Point(3395.0, 1765.0), Point(3550.0, 1765.0), Point(3550.0, 1435.0), Point(3350.0, 1435.0), Point(3350.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(2680.0, 1340.0), Point(2680.0, 1670.0), Point(2815.0, 1670.0), Point(2815.0, 3105.0), Point(2945.0, 3105.0), Point(2945.0, 1670.0), Point(3010.0, 1670.0), Point(3010.0, 1340.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(1780.0, 410.0), Point(1780.0, 1420.0), Point(1750.0, 1420.0), Point(1750.0, 1750.0), Point(2080.0, 1750.0), Point(2080.0, 1420.0), Point(1910.0, 1420.0), Point(1910.0, 410.0)]))
+    cell.add_shape(PolygonShape(tech['GatPoly'], [Point(5355.0, 410.0), Point(5355.0, 1455.0), Point(5815.0, 1455.0), Point(5815.0, 3335.0), Point(5945.0, 3335.0), Point(5945.0, 1915.0), Point(6385.0, 1915.0), Point(6385.0, 1615.0), Point(5945.0, 1615.0), Point(5945.0, 1305.0), Point(5485.0, 1305.0), Point(5485.0, 410.0)]))
+
+    # Metal1
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(9475.0, 620.0, 9905.0, 1360.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(8520.0, 1560.0, 8955.0, 1895.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(1275.0, 1435.0, 1570.0, 1920.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(3220.0, 1435.0, 3540.0, 2255.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(3720.0, 1435.0, 4090.0, 2255.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(6070.0, 1530.0, 6400.0, 1960.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(0.0, 3560.0, 10080.0, 4000.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(0.0, -220.0, 10080.0, 220.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(735.0, 1435.0, 1095.0, 1920.0)))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(8195.0, 760.0), Point(8195.0, 1400.0), Point(8180.0, 1400.0), Point(8180.0, 1665.0), Point(7850.0, 1665.0), Point(7850.0, 1995.0), Point(8170.0, 1995.0), Point(8170.0, 2200.0), Point(8195.0, 2200.0), Point(8195.0, 2810.0), Point(8570.0, 2810.0), Point(8570.0, 2205.0), Point(8355.0, 2205.0), Point(8355.0, 1970.0), Point(8340.0, 1970.0), Point(8340.0, 1485.0), Point(8355.0, 1485.0), Point(8355.0, 1360.0), Point(8745.0, 1360.0), Point(8745.0, 760.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(0.0, -220.0), Point(0.0, 220.0), Point(985.0, 220.0), Point(985.0, 840.0), Point(1245.0, 840.0), Point(1245.0, 220.0), Point(3495.0, 220.0), Point(3495.0, 835.0), Point(3770.0, 835.0), Point(3770.0, 220.0), Point(5545.0, 220.0), Point(5545.0, 960.0), Point(5805.0, 960.0), Point(5805.0, 220.0), Point(9035.0, 220.0), Point(9035.0, 1325.0), Point(9295.0, 1325.0), Point(9295.0, 220.0), Point(10080.0, 220.0), Point(10080.0, -220.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(985.0, 2120.0), Point(985.0, 3560.0), Point(0.0, 3560.0), Point(0.0, 4000.0), Point(10080.0, 4000.0), Point(10080.0, 3560.0), Point(9355.0, 3560.0), Point(9355.0, 2585.0), Point(9095.0, 2585.0), Point(9095.0, 3560.0), Point(6280.0, 3560.0), Point(6280.0, 2905.0), Point(5950.0, 2905.0), Point(5950.0, 3560.0), Point(3780.0, 3560.0), Point(3780.0, 2920.0), Point(3520.0, 2920.0), Point(3520.0, 3560.0), Point(1245.0, 3560.0), Point(1245.0, 2120.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(9475.0, 620.0), Point(9475.0, 1360.0), Point(9665.0, 1360.0), Point(9665.0, 2780.0), Point(9640.0, 2780.0), Point(9640.0, 3075.0), Point(9905.0, 3075.0), Point(9905.0, 620.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(6965.0, 1160.0), Point(6965.0, 1505.0), Point(7010.0, 1505.0), Point(7010.0, 3295.0), Point(8910.0, 3295.0), Point(8910.0, 2400.0), Point(9460.0, 2400.0), Point(9460.0, 1605.0), Point(9200.0, 1605.0), Point(9200.0, 2230.0), Point(8750.0, 2230.0), Point(8750.0, 3125.0), Point(7300.0, 3125.0), Point(7300.0, 1335.0), Point(7210.0, 1335.0), Point(7210.0, 1160.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(6115.0, 440.0), Point(6115.0, 1140.0), Point(5320.0, 1140.0), Point(5320.0, 595.0), Point(4550.0, 595.0), Point(4550.0, 870.0), Point(5150.0, 870.0), Point(5150.0, 1300.0), Point(5715.0, 1300.0), Point(5715.0, 2200.0), Point(4525.0, 2200.0), Point(4525.0, 2945.0), Point(5385.0, 2945.0), Point(5385.0, 2370.0), Point(5885.0, 2370.0), Point(5885.0, 1300.0), Point(6375.0, 1300.0), Point(6375.0, 600.0), Point(7845.0, 600.0), Point(7845.0, 1260.0), Point(7510.0, 1260.0), Point(7510.0, 2810.0), Point(7860.0, 2810.0), Point(7860.0, 2220.0), Point(7670.0, 2220.0), Point(7670.0, 1420.0), Point(7980.0, 1420.0), Point(7980.0, 1350.0), Point(8005.0, 1350.0), Point(8005.0, 440.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(6580.0, 820.0), Point(6580.0, 2170.0), Point(6510.0, 2170.0), Point(6510.0, 2555.0), Point(5570.0, 2555.0), Point(5570.0, 3125.0), Point(4240.0, 3125.0), Point(4240.0, 2435.0), Point(2770.0, 2435.0), Point(2770.0, 1950.0), Point(2420.0, 1950.0), Point(2420.0, 870.0), Point(2095.0, 870.0), Point(2095.0, 1200.0), Point(2260.0, 1200.0), Point(2260.0, 2905.0), Point(2770.0, 2905.0), Point(2770.0, 2595.0), Point(4015.0, 2595.0), Point(4015.0, 3295.0), Point(5770.0, 3295.0), Point(5770.0, 2725.0), Point(6510.0, 2725.0), Point(6510.0, 3160.0), Point(6780.0, 3160.0), Point(6780.0, 980.0), Point(7450.0, 980.0), Point(7450.0, 1080.0), Point(7665.0, 1080.0), Point(7665.0, 820.0)]))
+    cell.add_shape(PolygonShape(tech['Metal1'], [Point(1750.0, 475.0), Point(1750.0, 1020.0), Point(640.0, 1020.0), Point(640.0, 590.0), Point(330.0, 590.0), Point(330.0, 2985.0), Point(745.0, 2985.0), Point(745.0, 2120.0), Point(500.0, 2120.0), Point(500.0, 1200.0), Point(1750.0, 1200.0), Point(1750.0, 1750.0), Point(2080.0, 1750.0), Point(2080.0, 1420.0), Point(1915.0, 1420.0), Point(1915.0, 645.0), Point(2680.0, 645.0), Point(2680.0, 1670.0), Point(3010.0, 1670.0), Point(3010.0, 1210.0), Point(4300.0, 1210.0), Point(4300.0, 1670.0), Point(4610.0, 1670.0), Point(4610.0, 1210.0), Point(4800.0, 1210.0), Point(4800.0, 1970.0), Point(5535.0, 1970.0), Point(5535.0, 1665.0), Point(4970.0, 1665.0), Point(4970.0, 1050.0), Point(2850.0, 1050.0), Point(2850.0, 475.0)]))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(8520.0, 1560.0, 8955.0, 1895.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(6070.0, 1530.0, 6400.0, 1960.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(3720.0, 1435.0, 4090.0, 2255.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(3220.0, 1435.0, 3540.0, 2255.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(1275.0, 1435.0, 1570.0, 1920.0)))
+    cell.add_shape(RectShape(tech['Metal1'], Rect.from_lbrt(735.0, 1435.0, 1095.0, 1920.0)))
+    cell.add_shape(TextShape(tech['Metal1'], 'X', Point(9705.0, 990.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'A1', Point(3395.0, 1940.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'A2', Point(3920.0, 1950.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'S0', Point(845.0, 1665.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'VDD', Point(5870.0, 3780.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'VSS', Point(3875.0, 0.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'S1', Point(8755.0, 1770.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'A0', Point(1385.0, 1705.0), purpose='label'))
+    cell.add_shape(TextShape(tech['Metal1'], 'A3', Point(6255.0, 1795.0), purpose='label'))
+
+    # NWell
+    cell.add_shape(PolygonShape(tech['NWell'], [Point(740.0, 1615.0), Point(740.0, 1750.0), Point(-240.0, 1750.0), Point(-240.0, 4170.0), Point(10320.0, 4170.0), Point(10320.0, 1750.0), Point(4560.0, 1750.0), Point(4560.0, 1615.0)]))
+
+    # PSD
+    cell.add_shape(PolygonShape(tech['PSD'], [Point(790.0, 1625.0), Point(790.0, 1760.0), Point(-70.0, 1760.0), Point(-70.0, 3600.0), Point(10150.0, 3600.0), Point(10150.0, 1760.0), Point(4550.0, 1760.0), Point(4550.0, 1625.0)]))
+    cell.add_shape(RectShape(tech['PSD'], Rect.from_lbrt(-70.0, -180.0, 10150.0, 180.0)))
+
+    # Ports
+    cell.add_port(Port('X', 'X', tech['Metal1'], Rect.from_lbrt(9705.0, 990.0, 9705.0, 990.0)))
+    cell.add_port(Port('A1', 'A1', tech['Metal1'], Rect.from_lbrt(3395.0, 1940.0, 3395.0, 1940.0)))
+    cell.add_port(Port('A2', 'A2', tech['Metal1'], Rect.from_lbrt(3920.0, 1950.0, 3920.0, 1950.0)))
+    cell.add_port(Port('S0', 'S0', tech['Metal1'], Rect.from_lbrt(845.0, 1665.0, 845.0, 1665.0)))
+    cell.add_port(Port('VDD', 'VDD', tech['Metal1'], Rect.from_lbrt(5870.0, 3780.0, 5870.0, 3780.0), direction='POWER'))
+    cell.add_port(Port('VSS', 'VSS', tech['Metal1'], Rect.from_lbrt(3875.0, 0.0, 3875.0, 0.0), direction='GROUND'))
+    cell.add_port(Port('S1', 'S1', tech['Metal1'], Rect.from_lbrt(8755.0, 1770.0, 8755.0, 1770.0)))
+    cell.add_port(Port('A0', 'A0', tech['Metal1'], Rect.from_lbrt(1385.0, 1705.0, 1385.0, 1705.0)))
+    cell.add_port(Port('A3', 'A3', tech['Metal1'], Rect.from_lbrt(6255.0, 1795.0, 6255.0, 1795.0)))
+
+    return cell
+
+
+if __name__ == "__main__":
+    from aion_layout.tech import sg13g2_tech
+    c = generate('sg13g2_mux4_1', sg13g2_tech)
+    c.write_gds("sg13g2_mux4_1.gds")

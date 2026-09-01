@@ -19,9 +19,10 @@ SPICE_NETLIST="${1:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERA
 BUILD_DIR="${2:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERATIONS]}"
 MAX_ITERATIONS="${3:-10}"
 # MODEL="${MODEL:-openai/gpt-oss-120b}"
-MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B}"
+MODEL="${MODEL:-Qwen/Qwen3-VL-235B-A22B-Thinking}"
 
-COPILOT_RCP="${COPILOT_RCP:-/home/filippoquadri/phd/aion/copilot-rcp.sh}"
+CEFPROVIDER_API_KEY="${CEFPROVIDER_API_KEY:?Set CEFPROVIDER_API_KEY in your environment (e.g. ~/.bashrc) before running orchestrate.sh}"
+COPILOT_RCP="${COPILOT_RCP:?Set COPILOT_RCP to the path of your copilot-rcp.sh (e.g. in ~/.bashrc) before running orchestrate.sh}"
 
 STATE_FILE="${BUILD_DIR}/layout/state.json"
 MEMORY_FILE="${BUILD_DIR}/memory.md"

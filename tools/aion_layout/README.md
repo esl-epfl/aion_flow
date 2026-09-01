@@ -64,6 +64,57 @@ python3 scripts/report_verification.py \
 DRC/LVS are executed through the local `scripts/docker_run.sh` wrapper,
 which runs `sak-drc.sh` / `sak-lvs.sh` inside the AION Docker container.
 
+## AI-assisted fix loop (`make flow` / `orchestrate.sh`)
+
+`orchestrate.sh` drives an iterative loop on top of the deterministic
+`gds`/`drc`/`lvs`/`verify` steps above: it scaffolds a cell, runs the
+deterministic pipeline, and — if DRC/LVS don't pass — hands the failure to
+an AI "fix agent" (via the `copilot-rcp.sh` wrapper) that patches the cell
+generator and tries again, up to `MAX_ITERATIONS` times.
+
+It needs two things from your environment, both **required, with no
+built-in default** — the script will stop immediately with a clear error
+if either is unset:
+
+| Variable | What it is |
+|----------|------------|
+| `CEFPROVIDER_API_KEY` | API key for the model provider `copilot-rcp.sh` talks to. |
+| `COPILOT_RCP` | Absolute path to your local `copilot-rcp.sh` script. |
+
+Add both to your `~/.bashrc` (or `~/.zshrc`) so every new shell has them,
+then reload it:
+
+```bash
+echo 'export CEFPROVIDER_API_KEY="sk-..."' >> ~/.bashrc
+echo 'export COPILOT_RCP="$HOME/path/to/copilot-rcp.sh"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Optionally override the model (default: `Qwen/Qwen3-VL-235B-A22B-Thinking`
+— must be one of the models `copilot-rcp.sh --list` shows):
+
+```bash
+export MODEL=openai/gpt-oss-120b
+```
+
+Then launch it, either directly:
+
+```bash
+cd tools/aion_layout
+./orchestrate.sh AION_inv_nand2_nor2_1_minimized.spice build 10
+#                ^netlist                                ^build dir ^max iterations
+```
+
+or via the Makefile shortcut, which passes the same fixed arguments:
+
+```bash
+cd tools/aion_layout
+make flow
+```
+
+Never commit `CEFPROVIDER_API_KEY` or hardcode it into `orchestrate.sh` —
+keep it in your shell environment only.
+
 ## Writing a cell generator
 
 A cell generator is a Python module that exposes:

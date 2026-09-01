@@ -24,7 +24,13 @@ if [ -t 1 ]; then
     DOCKER_FLAGS="-it"
 fi
 
-exec docker exec ${DOCKER_FLAGS} -u "$(id -u):$(id -g)" iic-osic-tools_shell_uid_1000 \
+# Defaults to the "xvnc" container variant a companion repo's own
+# docker-start target creates (see e.g. SG13G2_ASIC-Design-FLL/CLAUDE.md).
+# Override with CONTAINER_NAME if you started the container another way,
+# e.g. via ../../start_local.sh (which defaults to iic-osic-tools_shell_uid_<uid>).
+CONTAINER_NAME="${CONTAINER_NAME:-iic-osic-tools_xvnc_uid_$(id -u)}"
+
+exec docker exec ${DOCKER_FLAGS} -u "$(id -u):$(id -g)" "${CONTAINER_NAME}" \
     bash -lc "export PDK=ihp-sg13g2; export AION_IN_DOCKER=1; cd ${RUN_DIR} && \
         printf '\n\033[1;36m========== AION CONTAINER OUTPUT ==========\033[0m\n\n' && \
         ${ARGS}"

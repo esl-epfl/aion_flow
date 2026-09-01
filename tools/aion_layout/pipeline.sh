@@ -96,7 +96,10 @@ step_drc () {
   drc_dir="${BUILD_DIR}/layout/iteration_${n}/drc"
   mkdir -p "$drc_dir"
 
-  ./scripts/docker_run.sh "cd tools/aion_layout && sak-drc.sh -d -b -l macro -w ${drc_dir} ${gds}"
+  # sak-drc.sh's KLayout DRC path (-b/-k) is not implemented for ihp-sg13g2
+  # and exit()s before waiting for the backgrounded Magic job, killing it
+  # before it can write its report — so only Magic DRC (-m) works here.
+  ./scripts/docker_run.sh "cd tools/aion_layout && sak-drc.sh -d -m -w ${drc_dir} ${gds}"
 
   [[ -n "$(ls -A "$drc_dir" 2>/dev/null)" ]] || { echo "DRC produced no output" >&2; return 1; }
   state_write_atomic '.steps.drc_done = true'
@@ -109,7 +112,7 @@ step_lvs () {
   lvs_dir="${BUILD_DIR}/layout/iteration_${n}/lvs"
   mkdir -p "$lvs_dir"
 
-  ./scripts/docker_run.sh "cd tools/aion_layout && sak-lvs.sh -d -b -w ${lvs_dir} -s ${SPICE_NETLIST} -l ${gds} -c ${CELL_NAME}"
+  ./scripts/docker_run.sh "cd tools/aion_layout && sak-lvs.sh -d -w ${lvs_dir} -s ${SPICE_NETLIST} -l ${gds} -c ${CELL_NAME}"
 
   [[ -n "$(ls -A "$lvs_dir" 2>/dev/null)" ]] || { echo "LVS produced no output" >&2; return 1; }
   state_write_atomic '.steps.lvs_done = true'

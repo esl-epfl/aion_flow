@@ -63,7 +63,7 @@ def _print_lvs(report: LvsReport) -> None:
             print(f"      {mark} {dev}: layout={c1} schematic={c2}")
 
 
-def _parse_existing(cell_name: str, runs_dir: Path) -> tuple[DrcReport, DrcReport, LvsReport]:
+def _parse_existing(cell_name: str, runs_dir: Path) -> tuple[DrcReport, DrcReport | None, LvsReport]:
     # The sak-* wrappers create either ``<runs_dir>/drc/<cell>/`` or
     # ``<runs_dir>/drc_test/`` style directories.  Try both layouts.
     drc_dirs = [
@@ -86,14 +86,17 @@ def _parse_existing(cell_name: str, runs_dir: Path) -> tuple[DrcReport, DrcRepor
 
     if magic_rpt is None:
         raise FileNotFoundError(f"Magic DRC report not found under {runs_dir}")
-    if klayout_rpt is None:
-        raise FileNotFoundError(f"KLayout DRC report not found under {runs_dir}")
     if lvs_rpt is None:
         raise FileNotFoundError(f"Netgen LVS report not found under {runs_dir}")
 
+    # KLayout DRC is not implemented by sak-drc.sh for every PDK (e.g.
+    # ihp-sg13g2), so no ``.lyrdb`` will ever be produced there. Treat it as
+    # skipped rather than a hard failure.
+    klayout_drc = parse_klayout_lyrdb(klayout_rpt) if klayout_rpt is not None else None
+
     return (
         parse_magic_drc_report(magic_rpt),
-        parse_klayout_lyrdb(klayout_rpt),
+        klayout_drc,
         parse_netgen_lvs_report(lvs_rpt),
     )
 
@@ -171,13 +174,16 @@ def main(argv: list[str] | None = None) -> int:
 
     print("DRC")
     _print_drc("Magic", magic_drc)
-    _print_drc("KLayout", klayout_drc)
+    if klayout_drc is not None:
+        _print_drc("KLayout", klayout_drc)
+    else:
+        print(f"  {'KLayout':12} : SKIPPED (not supported for this PDK)")
     print()
     print("LVS")
     _print_lvs(lvs)
     print()
 
-    passed = magic_drc.clean and klayout_drc.clean and lvs.clean
+    passed = magic_drc.clean and (klayout_drc is None or klayout_drc.clean) and lvs.clean
     print("RESULT:    " + ("PASS" if passed else "FAIL"))
     return 0 if passed else 1
 

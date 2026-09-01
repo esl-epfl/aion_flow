@@ -191,11 +191,16 @@ EOF
     echo ">> Agent will append iteration findings to: ${MEMORY_FILE}"
     echo
 
+    # --add-dir "$SCRIPT_DIR" also loads tools/aion_layout/.github/skills/ (the
+    # draw-layout-AI skill this prompt is derived from) as trusted project
+    # configuration, so it's picked up for every user without any personal
+    # `copilot skill add` setup — see `copilot --help`'s --add-dir entry.
     timeout "$FIX_TIMEOUT" "$COPILOT_RCP" "$CEFPROVIDER_API_KEY" "$MODEL" -p "$prompt" \
         --allow-tool view \
         --allow-tool edit \
         --allow-tool bash \
         --deny-tool write-outside-workspace \
+        --add-dir "$SCRIPT_DIR" \
         --add-dir "$(dirname "$src")" \
         --add-dir "$(dirname "$next_mod")" \
         --add-dir "$BUILD_DIR"

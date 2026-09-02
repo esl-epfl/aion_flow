@@ -362,8 +362,16 @@ def run_drc(
     gds_path: os.PathLike[str],
     work_dir: os.PathLike[str],
     run_script: os.PathLike[str] = _default_run_script(),
-) -> Tuple[DrcReport, DrcReport]:
-    """Run both Magic and KLayout DRC and return parsed reports.
+) -> Tuple[DrcReport, Optional[DrcReport]]:
+    """Run Magic DRC (and KLayout DRC where the PDK supports it) and return
+    parsed reports.
+
+    ``sak-drc.sh``'s KLayout DRC path is not implemented for every PDK (e.g.
+    ihp-sg13g2): requesting it with ``-b``/``-k`` there makes the script
+    ``exit`` before it even waits for the backgrounded Magic job, killing
+    Magic before it can write its report. So only Magic DRC (``-m``) is run
+    here; the second return value is ``None`` when no KLayout report is
+    produced.
 
     ``work_dir`` must not exist or will be removed before the run so that stale
     reports are not parsed by accident.
@@ -392,7 +400,7 @@ def run_drc(
         [
             str(script),
             "cd tools/aion_layout && sak-drc.sh",
-            "-d", "-b", "-l", "macro",
+            "-d", "-m",
             "-w", rel(work_dir),
             rel(gds_path),
         ],
@@ -406,8 +414,9 @@ def run_drc(
 
     cell_name = gds_path.stem
     magic_rpt = _find_magic_drc_report(work_dir, cell_name)
-    klayout_rpt = _find_klayout_lyrdb(work_dir, cell_name)
-    return parse_magic_drc_report(magic_rpt), parse_klayout_lyrdb(klayout_rpt)
+    klayout_rpt = _find_klayout_lyrdb_optional(work_dir, cell_name)
+    klayout_drc = parse_klayout_lyrdb(klayout_rpt) if klayout_rpt is not None else None
+    return parse_magic_drc_report(magic_rpt), klayout_drc
 
 
 def run_lvs(
@@ -439,7 +448,7 @@ def run_lvs(
         [
             str(script),
             "cd tools/aion_layout && sak-lvs.sh",
-            "-d", "-b",
+            "-d",
             "-w", rel(work_dir),
             "-s", rel(netlist_path),
             "-l", rel(gds_path),
@@ -477,6 +486,7 @@ def verify(
     magic_drc, klayout_drc = run_drc(gds_path, drc_work, run_script)
     lvs = run_lvs(gds_path, netlist_path, cell_name, lvs_work, run_script)
 
+    klayout_clean = klayout_drc is None or klayout_drc.clean
     return {
         "cell": cell_name,
         "gds": str(gds_path),
@@ -484,10 +494,10 @@ def verify(
         "drc": {
             "magic": magic_drc,
             "klayout": klayout_drc,
-            "clean": magic_drc.clean and klayout_drc.clean,
+            "clean": magic_drc.clean and klayout_clean,
         },
         "lvs": lvs,
-        "passed": magic_drc.clean and klayout_drc.clean and lvs.clean,
+        "passed": magic_drc.clean and klayout_clean and lvs.clean,
     }
 
 
@@ -503,6 +513,13 @@ def _find_klayout_lyrdb(work_dir: Path, cell_name: str) -> Path:
     if not candidates:
         raise VerificationError(f"KLayout DRC report not found under {work_dir}")
     return candidates[0]
+
+
+def _find_klayout_lyrdb_optional(work_dir: Path, cell_name: str) -> Optional[Path]:
+    """Like :func:`_find_klayout_lyrdb`, but returns ``None`` instead of
+    raising when no report exists (KLayout DRC is not run for every PDK)."""
+    candidates = list(work_dir.rglob("*_full.lyrdb"))
+    return candidates[0] if candidates else None
 
 
 def _find_netgen_lvs_report(work_dir: Path, cell_name: str) -> Path:

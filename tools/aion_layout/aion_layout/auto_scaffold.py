@@ -33,12 +33,63 @@ _POLY_BOTTOM_NM = 410.0
 _POLY_TOP_NM = 3360.0
 _WELL_OVERhang_NM = 240.0
 
+# Metal1 stub bands.  Both the input bars and the output stub sit in the gap
+# between the NMOS and PMOS active areas.  For an odd input count the middle
+# gate falls exactly on CELL_WIDTH/2, i.e. under the output stub, so the two
+# kinds of stub must not share a horizontal band: if they did, that input and
+# the output would merge into a single Metal1 node and extraction would lose
+# the input.  The gap is therefore split into two bands kept apart by the
+# Metal1 minimum spacing.
+#
+# KNOWN TRADE-OFF, deliberate.  Splitting the 730 nm gap into two bands leaves
+# each stub about 275 nm tall, and at the stub widths the default cell width
+# allows that is below the M1.d minimum-area rule (0.09 um^2): a live run
+# reports four "Metal1 minimum area" violations, one per stub, on top of the
+# eight LU.a/LU.b violations the tap-less scaffold has by design.
+#
+# That is the better failure.  The overlap it replaces merged an input and the
+# output into one Metal1 node, so extraction silently lost a port and LVS could
+# not be reconstructed from the result.  A minimum-area violation is reported
+# with its rule name and coordinates, reaches the model in the evidence packet,
+# and is fixed by enlarging one rectangle.
+#
+# Satisfying both rules here needs a wider cell or a different stub placement,
+# i.e. a floorplan decision.  The scaffold does not make floorplan decisions --
+# it is a deliberately incomplete starting point, and the model draws the cell.
+_METAL1_MIN_SPACING_NM = 180.0
+_OUTPUT_STUB_TOP_NM = 1600.0
+_INPUT_BAR_BOTTOM_NM = _OUTPUT_STUB_TOP_NM + _METAL1_MIN_SPACING_NM
+_INPUT_BAR_CENTER_Y_NM = (_INPUT_BAR_BOTTOM_NM + _PMOS_BOTTOM_NM) / 2.0
+_INPUT_BAR_HALF_HEIGHT_NM = (_PMOS_BOTTOM_NM - _INPUT_BAR_BOTTOM_NM) / 2.0
+_INPUT_BAR_HALF_WIDTH_NM = 145.0
 
-def _input_bar_rect(x_center: float, y_center: float) -> Tuple[float, float, float, float]:
+
+def _input_bar_rect(
+    x_center: float,
+    y_center: float,
+    half_w: float = _INPUT_BAR_HALF_WIDTH_NM,
+) -> Tuple[float, float, float, float]:
     """Return (left, bottom, right, top) for a Metal1 input bar stub."""
-    half_w = 145.0
-    half_h = 215.0
+    half_h = _INPUT_BAR_HALF_HEIGHT_NM
     return (x_center - half_w, y_center - half_h, x_center + half_w, y_center + half_h)
+
+
+def _input_bar_half_width(gates: List[Tuple[str, float]]) -> float:
+    """Return a bar half-width that keeps neighbouring input bars apart.
+
+    Bars are clipped to half the gate pitch minus the Metal1 minimum spacing, so
+    two inputs can never merge into one node.  With the default cell width the
+    pitch is always wide enough and the nominal half-width is returned
+    unchanged; only an explicitly requested, very narrow ``cell_width`` shrinks
+    the bars.  In that over-constrained case the bars are still kept strictly
+    disjoint and DRC reports the width/spacing violation: a visible width error
+    is recoverable, a silently merged net is not.
+    """
+    if len(gates) < 2:
+        return _INPUT_BAR_HALF_WIDTH_NM
+    pitch = min(b[1] - a[1] for a, b in zip(gates, gates[1:]))
+    spacing = min(_METAL1_MIN_SPACING_NM, pitch / 2.0)
+    return min(_INPUT_BAR_HALF_WIDTH_NM, (pitch - spacing) / 2.0)
 
 
 def _gate_positions(inputs: List[str], active_left: float, active_right: float) -> List[Tuple[str, float]]:
@@ -70,14 +121,10 @@ def generate_scaffold_source(
     active_left = site_width / 2.0
     active_right = cell_width - site_width / 2.0
     gates = _gate_positions(inputs, active_left, active_right)
+    bar_half_w = _input_bar_half_width(gates)
 
     gate_entries = "\n".join(
         f'    ("{net}", {x:.1f}),' for net, x in gates
-    )
-
-    pin_entries = "\n".join(
-        f'    draw_pin(tech["Metal1"], Rect.from_lbrt(*_input_bar_rect({x:.1f}, 1605.0)), "{net}", tech=tech),'
-        for net, x in gates
     )
 
     lines = [
@@ -110,8 +157,8 @@ def generate_scaffold_source(
         '',
         '',
         'def _input_bar_rect(x_center: float, y_center: float) -> tuple[float, float, float, float]:',
-        '    half_w = 145.0',
-        '    half_h = 215.0',
+        f'    half_w = {bar_half_w:.1f}',
+        f'    half_h = {_INPUT_BAR_HALF_HEIGHT_NM:.1f}',
         '    return (x_center - half_w, y_center - half_h, x_center + half_w, y_center + half_h)',
         '',
         '',
@@ -136,11 +183,13 @@ def generate_scaffold_source(
         '    for net, x in GATES:',
         f'        cell.add_shape(RectShape(tech["GatPoly"], Rect.from_lbrt(x - {_GATE_WIDTH_NM/2:.1f}, {_POLY_BOTTOM_NM:.1f},',
         f'                                                                x + {_GATE_WIDTH_NM/2:.1f}, {_POLY_TOP_NM:.1f})))',
-        '        cell.merge_subcell(draw_pin(tech["Metal1"], Rect.from_lbrt(*_input_bar_rect(x, 1605.0)), net, tech=tech))',
+        f'        cell.merge_subcell(draw_pin(tech["Metal1"], Rect.from_lbrt(*_input_bar_rect(x, {_INPUT_BAR_CENTER_Y_NM:.1f})), net, tech=tech))',
         '',
         '    # Output pin (stub).  Replace with the real output Metal1 polygon.',
+        '    # It sits in its own Metal1 band, below the input bars, so it cannot',
+        '    # merge with the input bar of a gate placed at CELL_WIDTH/2.',
         f'    cell.merge_subcell(draw_pin(tech["Metal1"], Rect.from_lbrt(CELL_WIDTH/2 - 130.0, {_NMOS_TOP_NM:.1f},',
-        f'                                                              CELL_WIDTH/2 + 130.0, {_PMOS_BOTTOM_NM:.1f}), "{output}", tech=tech))',
+        f'                                                              CELL_WIDTH/2 + 130.0, {_OUTPUT_STUB_TOP_NM:.1f}), "{output}", tech=tech))',
         '',
         '    return cell',
         '',

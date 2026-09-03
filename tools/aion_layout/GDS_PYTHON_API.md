@@ -80,6 +80,10 @@ Immutable axis-aligned rectangle defined by two `Point`s.
 ```python
 from aion_layout.primitives import Rect, Point
 
+# 480 x 3780 nm is one SG13G2 placement site by the PDK row height, i.e.
+# tech.standard_cell["site_width_nm"] and ["cell_height_nm"] -- process facts,
+# not a floorplan.
+
 # From left/bottom/right/top
 r = Rect.from_lbrt(0.0, 0.0, 480.0, 3780.0)
 
@@ -268,8 +272,13 @@ from aion_layout.cell import Cell
 from aion_layout.tech import sg13g2_tech
 from aion_layout.primitives import Rect
 
+# Cell width is a caller decision (here: five placement sites); the row
+# height is a PDK fact and comes from the technology.
+site_w = sg13g2_tech.standard_cell["site_width_nm"]    # 480.0 nm, PDK site pitch
+row_h = sg13g2_tech.standard_cell["cell_height_nm"]    # 3780.0 nm, PDK row height
+
 cell = Cell("my_cell", sg13g2_tech)
-cell.set_boundary(Rect.from_lbrt(0.0, 0.0, 1920.0, 3780.0))
+cell.set_boundary(Rect.from_lbrt(0.0, 0.0, 5 * site_w, row_h))
 
 # Add shapes
 cell.add_shape(RectShape(...))
@@ -305,8 +314,46 @@ from aion_layout.building_blocks import (
     draw_power_rail,
     draw_contact,
     draw_via_stack,
+    draw_tap,
     draw_transistor,
 )
+```
+
+### Names used by the examples below
+
+The snippets in this section share one set of caller-side variables so they read
+as a sequence. Only `site_w`, `row_h`, `rail_w`, `gate_ext`, `gate_w` and
+`activ_spacing` are PDK facts, read back from `tech`; every band position is
+this example's own decision and yours will be different. Derive your floorplan
+from the cell you are building -- from its netlist, its site count and its rail
+geometry -- never by copying coordinates out of a document.
+
+```python
+# PDK facts.
+site_w = tech.standard_cell["site_width_nm"]              # 480.0 nm, PDK site pitch
+row_h = tech.standard_cell["cell_height_nm"]              # 3780.0 nm, PDK row height
+rail_w = tech.standard_cell["power_rail_width_nm"]        # 440.0 nm, PDK rail width
+gate_ext = tech.standard_cell["gate_extension_nm"]        # 185.0 poly past active
+gate_w = tech.design_rules["min_width_nm"]["GatPoly"]     # 130.0 nm, minimum poly
+activ_spacing = tech.design_rules["min_spacing_nm"]["Activ"]  # 210.0
+
+# This example's own choices.
+sites_wide = 5          # cell width, in placement sites
+x_margin = 380.0        # active kept this far inside the left/right cell edge
+rail_clear = 600.0      # free strip between each rail and the nearest active
+nmos_h, pmos_h = 800.0, 1000.0   # active band heights
+well_margin = 400.0     # NWell grown this far around the PMOS active
+
+cell_w = sites_wide * site_w
+rail_half = rail_w / 2.0        # rails are centred on y = 0 and y = row_h
+vss_rail = Rect.from_lbrt(0.0, -rail_half, cell_w, rail_half)
+vdd_rail = Rect.from_lbrt(0.0, row_h - rail_half, cell_w, row_h + rail_half)
+
+act_l, act_r = x_margin, cell_w - x_margin
+nmos_active = Rect.from_lbrt(act_l, vss_rail.top + rail_clear,
+                             act_r, vss_rail.top + rail_clear + nmos_h)
+pmos_active = Rect.from_lbrt(act_l, vdd_rail.bottom - rail_clear - pmos_h,
+                             act_r, vdd_rail.bottom - rail_clear)
 ```
 
 ### `draw_diffusion(rect, doping, tech=None)`
@@ -314,8 +361,9 @@ from aion_layout.building_blocks import (
 Draw active diffusion plus the corresponding implant layer. `doping` is `"n"` or `"p"`. For n-type diffusion no NSD layer is emitted (it is the SG13G2 default).
 
 ```python
-subcell = draw_diffusion(Rect.from_lbrt(300, 590, 1620, 1330), "n", tech)
+subcell = draw_diffusion(nmos_active, "n", tech)
 cell.merge_subcell(subcell)
+cell.merge_subcell(draw_diffusion(pmos_active, "p", tech))
 ```
 
 ### `draw_well(rect, well_type, tech=None)`
@@ -323,7 +371,15 @@ cell.merge_subcell(subcell)
 Draw an `NWell` or `PWell` rectangle.
 
 ```python
-cell.merge_subcell(draw_well(Rect.from_lbrt(-240, 1750, 2160, 4170), "n", tech))
+# The well encloses the PMOS active with the caller's own margin and runs up to
+# the top of the row.
+nwell = Rect.from_lbrt(
+    pmos_active.left - well_margin,
+    pmos_active.bottom - well_margin,
+    pmos_active.right + well_margin,
+    vdd_rail.top,
+)
+cell.merge_subcell(draw_well(nwell, "n", tech))
 ```
 
 ### `draw_poly_gate(rect, tech=None)`
@@ -331,7 +387,16 @@ cell.merge_subcell(draw_well(Rect.from_lbrt(-240, 1750, 2160, 4170), "n", tech))
 Draw a polysilicon gate rectangle and expose a `"G"` port.
 
 ```python
-subcell = draw_poly_gate(Rect.from_lbrt(640, 410, 770, 3360), tech)
+# Minimum-width poly, crossing both active bands and overhanging each by the
+# PDK gate extension.  x is wherever this cell wants the gate.
+gate_x = cell_w / 2.0
+gate = Rect.from_lbrt(
+    gate_x - gate_w / 2.0,
+    nmos_active.bottom - gate_ext,
+    gate_x + gate_w / 2.0,
+    pmos_active.top + gate_ext,
+)
+subcell = draw_poly_gate(gate, tech)
 cell.merge_subcell(subcell)
 ```
 
@@ -340,7 +405,14 @@ cell.merge_subcell(subcell)
 Draw a rectangular metal wire.
 
 ```python
-cell.merge_subcell(draw_metal_wire(tech["Metal1"], Rect.from_lbrt(0, -220, 1920, 220), tech))
+# A minimum-width Metal1 link across the gap between the two active bands.
+m1_w = tech.design_rules["min_width_nm"]["Metal1"]        # 160.0
+link_y = (nmos_active.top + pmos_active.bottom) / 2.0
+cell.merge_subcell(draw_metal_wire(
+    tech["Metal1"],
+    Rect.from_lbrt(act_l, link_y - m1_w / 2.0, act_r, link_y + m1_w / 2.0),
+    tech,
+))
 ```
 
 ### `draw_pin(layer, rect, name, net=None, tech=None)`
@@ -355,9 +427,12 @@ cell.merge_subcell(draw_pin(tech["Metal1"], input_bar, "A", tech=tech))
 
 Draw a horizontal Metal1 power rail. `net` is `"VDD"` or `"VSS"`. `cell_width` defaults to the site width from the technology.
 
+`y` is the centre line of the rail, so a rail drawn at `0.0` straddles the
+bottom row boundary and one drawn at the row height straddles the top.
+
 ```python
-cell.merge_subcell(draw_power_rail(0.0, 440.0, "VSS", tech, cell_width=1920.0))
-cell.merge_subcell(draw_power_rail(3780.0, 440.0, "VDD", tech, cell_width=1920.0))
+cell.merge_subcell(draw_power_rail(0.0, rail_w, "VSS", tech, cell_width=cell_w))
+cell.merge_subcell(draw_power_rail(row_h, rail_w, "VDD", tech, cell_width=cell_w))
 ```
 
 ### `draw_contact(stack, rect, tech=None)`
@@ -380,19 +455,66 @@ Convenience wrapper for a single via between adjacent layers. Supported pairs:
 cell.merge_subcell(draw_via_stack("Metal1", "Metal2", via_rect, tech))
 ```
 
+### `draw_tap(rect, tap_type, net, tech=None)`
+
+Draw a well/substrate tap: implant, a row of `Cont` cuts, a Metal1 landing, a label and a port. `tap_type` is `"n"` for an n+ tap that ties an `NWell` to VDD, or `"p"` for a p+ tap that ties the p-substrate to VSS. Implants follow the same convention as `draw_diffusion`: `"n"` emits `Activ` alone, `"p"` emits `Activ` plus `PSD`.
+
+`rect` is the tap active area. The cuts are placed along its longer axis at a regular pitch, inset from its edges by the implant-to-cut enclosure (90 nm), and the Metal1 landing is the cut row grown by the Metal1-to-cut enclosure (70 nm). The `Port` and the Metal1 label are both named after `net`, so extraction sees the tie.
+
+The helper derives everything from `rect` and never invents a position, so `rect` is the whole of the caller's decision. Build it from the values the module already holds — its own cell width and height, the rail geometry it drew, the active bands it placed — rather than from copied constants. The names below are the caller's own variables, not part of the API:
+
+```python
+# p+ substrate tap tying the bulk to VSS.  Spans the same x-range as the NMOS
+# active band and fills the free strip between the VSS rail and that band.
+p_tap = Rect.from_lbrt(
+    nmos_active.left,
+    vss_rail.top,                        # reach the rail: the landing must overlap it
+    nmos_active.right,
+    nmos_active.bottom - activ_spacing,  # stay clear of the transistor diffusion
+)
+cell.merge_subcell(draw_tap(p_tap, "p", "VSS", tech))
+
+# n+ tap tying the NWell to VDD.  Mirror construction against the VDD rail; it
+# must fall inside the NWell rectangle drawn around the PMOS.
+n_tap = Rect.from_lbrt(
+    pmos_active.left,
+    pmos_active.top + activ_spacing,
+    pmos_active.right,
+    vdd_rail.bottom,
+)
+cell.merge_subcell(draw_tap(n_tap, "n", "VDD", tech))
+```
+
+For a `"p"` tap the helper emits `Activ` plus `PSD` over `rect`, a row of 160 nm `Cont` cuts inset from its edges, and a Metal1 landing grown around that cut row and carrying the `net` label and port; an `"n"` tap is the same without `PSD`. The tie to the supply comes from that landing overlapping the rail of the same net — `draw_tap` does not draw the rail, so a `rect` that stops short of it produces a tap that is electrically floating. Keep the tap active at least the `Activ` minimum spacing (210 nm) away from the transistor active areas.
+
+Placement is the caller's job: an `"n"` tap must sit inside an `NWell` rectangle, a `"p"` tap outside every `NWell`. `rect` must be at least 340 x 340 nm (one cut plus its enclosure on both sides) or `ValueError` is raised, as it is for an unknown `tap_type`.
+
+All dimensions come from `tech.design_rules` except the contact-to-contact spacing that sets the cut pitch, which the SG13G2 rule table does not carry; it is declared as the module-level constant `_ASSUMED_CONT_SPACING_NM` in `building_blocks.py`.
+
 ### `draw_transistor(gate_rect, active_rect, fet_type, fingers=1, tech=None)`
 
 Draw a transistor: diffusion, gate, and source/drain contacts. Currently only `fingers=1` is supported. The gate must be vertical (`width < height`). Returns a cell with `"S"` and `"D"` ports.
 
 ```python
 subcell = draw_transistor(
-    gate_rect=Rect.from_lbrt(640, 410, 770, 3360),
-    active_rect=Rect.from_lbrt(300, 590, 1620, 1330),
+    gate_rect=gate,             # the vertical poly built above
+    active_rect=nmos_active,
     fet_type="n",
     tech=tech,
 )
 cell.merge_subcell(subcell)
 ```
+
+### Latch-up: `LU.a` and `LU.b`
+
+The two SG13G2 latch-up rules bound the distance from a diffusion to a tap of the opposite type:
+
+- `LU.a` -- *P-diff distance to N-tap must be < 20.0um*: every p-diffusion (the PMOS active inside the NWell) needs an n+ tap within 20 um.
+- `LU.b` -- *N-diff distance to P-tap must be < 20.0um*: every n-diffusion (the NMOS active in the substrate) needs a p+ tap within 20 um.
+
+A cell that draws no taps at all is infinitely far from a tap, so **every** diffusion region is reported: one `LU.a` item per uncovered p-diffusion region and one `LU.b` item per uncovered n-diffusion region. Poly gates cut an active area into separate regions and each region is counted on its own, so the item count follows the geometry the generator drew, not the transistor count.
+
+The fix is not to move anything: it is to add tap rows with `draw_tap` -- an n+ tap inside the NWell tied to VDD, and a p+ tap in the substrate tied to VSS. Placing them in the strips next to the power rails, where they also serve as the bulk connection for LVS, clears both rules at once.
 
 ---
 
@@ -435,42 +557,88 @@ Same helper as in `building_blocks`, re-exported for convenience.
 
 ## Complete example
 
+The floorplan below is worked out in the generator from two kinds of input: PDK
+facts read from `tech`, and constants this generator declares for itself. Copying
+the numbers it happens to produce into another cell is never right -- a cell with
+a different transistor count, a different drive strength or different pin
+positions needs a different frame, so compute yours the same way, from your own
+netlist.
+
 ```python
-from aion_layout.building_blocks import draw_diffusion, draw_pin, draw_power_rail
+from aion_layout.building_blocks import (
+    draw_diffusion,
+    draw_pin,
+    draw_power_rail,
+    draw_well,
+)
 from aion_layout.cell import Cell, Port
 from aion_layout.primitives import Rect
 from aion_layout.shapes import RectShape
 from aion_layout.tech import Tech
 
-CELL_WIDTH = 1920.0
-CELL_HEIGHT = 3780.0
+# This generator's own floorplan choices -- not API constants.
+SITES_WIDE = 5            # cell width, in placement sites
+X_MARGIN_NM = 380.0       # active kept this far inside the left/right cell edge
+RAIL_CLEAR_NM = 600.0     # free strip between each rail and the nearest active
+NMOS_H_NM = 800.0         # NMOS active height
+PMOS_H_NM = 1000.0        # PMOS active height
+WELL_MARGIN_NM = 400.0    # NWell grown this far around the PMOS active
 
 
 def generate(name: str, tech: Tech) -> Cell:
+    # PDK facts.
+    site_w = tech.standard_cell["site_width_nm"]            # 480.0 nm, site pitch
+    row_h = tech.standard_cell["cell_height_nm"]            # 3780.0 nm, row height
+    rail_w = tech.standard_cell["power_rail_width_nm"]      # 440.0 nm, rail width
+    m1_w = tech.design_rules["min_width_nm"]["Metal1"]      # 160.0
+    rail_half = rail_w / 2.0   # rails are centred on y = 0 and y = row_h
+
+    cell_w = SITES_WIDE * site_w
+    act_l, act_r = X_MARGIN_NM, cell_w - X_MARGIN_NM
+    nmos = Rect.from_lbrt(act_l, rail_half + RAIL_CLEAR_NM,
+                          act_r, rail_half + RAIL_CLEAR_NM + NMOS_H_NM)
+    pmos_top = row_h - rail_half - RAIL_CLEAR_NM
+    pmos = Rect.from_lbrt(act_l, pmos_top - PMOS_H_NM, act_r, pmos_top)
+
     cell = Cell(name, tech)
-    cell.set_boundary(Rect.from_lbrt(0.0, 0.0, CELL_WIDTH, CELL_HEIGHT))
+    cell.set_boundary(Rect.from_lbrt(0.0, 0.0, cell_w, row_h))
 
-    # Diffusion
-    cell.merge_subcell(draw_diffusion(Rect.from_lbrt(300, 590, 1620, 1330), "n", tech))
-    cell.merge_subcell(draw_diffusion(Rect.from_lbrt(300, 2060, 1620, 3180), "p", tech))
+    # Diffusion.
+    cell.merge_subcell(draw_diffusion(nmos, "n", tech))
+    cell.merge_subcell(draw_diffusion(pmos, "p", tech))
 
-    # NWell around PMOS
-    cell.add_shape(RectShape(tech["NWell"], Rect.from_lbrt(-240, 1750, 2160, 4170)))
+    # NWell around the PMOS active, run up to the top rail.
+    cell.merge_subcell(draw_well(
+        Rect.from_lbrt(pmos.left - WELL_MARGIN_NM, pmos.bottom - WELL_MARGIN_NM,
+                       pmos.right + WELL_MARGIN_NM, row_h + rail_half),
+        "n",
+        tech,
+    ))
 
-    # Power rails
-    cell.merge_subcell(draw_power_rail(0.0, 440.0, "VSS", tech, CELL_WIDTH))
-    cell.merge_subcell(draw_power_rail(CELL_HEIGHT, 440.0, "VDD", tech, CELL_WIDTH))
+    # Power rails on the row boundaries.
+    cell.merge_subcell(draw_power_rail(0.0, rail_w, "VSS", tech, cell_w))
+    cell.merge_subcell(draw_power_rail(row_h, rail_w, "VDD", tech, cell_w))
 
-    # Input pin
-    cell.merge_subcell(
-        draw_pin(tech["Metal1"], Rect.from_lbrt(330, 1470, 620, 1900), "A", tech=tech)
-    )
-    cell.ports["A"] = Port(
-        "A", "A", tech["GatPoly"], Rect.from_lbrt(330, 1470, 620, 1900), direction="INPUT"
-    )
+    # Input pin: a Metal1 bar in the gap between the two active bands.
+    bar_y = (nmos.top + pmos.bottom) / 2.0
+    cell.merge_subcell(draw_pin(
+        tech["Metal1"],
+        Rect.from_lbrt(act_l, bar_y - m1_w / 2.0, act_l + 2 * m1_w, bar_y + m1_w / 2.0),
+        "A",
+        tech=tech,
+    ))
+
+    # Geometry the helpers did not draw needs its port declared explicitly.
+    out = Rect.from_lbrt(act_r - 2 * m1_w, bar_y - m1_w / 2.0,
+                         act_r, bar_y + m1_w / 2.0)
+    cell.add_shape(RectShape(tech["Metal1"], out))
+    cell.add_port(Port("Y", "Y", tech["Metal1"], out, direction="OUTPUT"))
 
     return cell
 ```
+
+This cell is a frame only: it has no transistors wired up, no taps and no
+output logic. It is the shape of a generator, not a template to fill in.
 
 Save the file and generate the GDS:
 

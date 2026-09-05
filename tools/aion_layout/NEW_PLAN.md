@@ -17,20 +17,20 @@ to the model in one turn is not answerable in one turn.**
 
 The original loop was blind and its gate could not fail:
 
-| Defect | Evidence |
-|---|---|
-| The model was shown almost nothing | `report_summary()` greps matched nothing; the entire injected payload was three characters: `---` |
-| `report.txt` carried no verdict | `report_verification.py` hunted a `*_full.lyrdb` the KLayout `macro` run does not always write, raised `FileNotFoundError` after printing only its header, leaving 918 bytes with no `DRC:`/`LVS:`/`RESULT:` |
-| That failure was silent | the pipeline ran under `if ! run_deterministic_steps...`, and POSIX shells suppress `set -e` for the whole command *including inside called functions*, so `step_report` ignored a non-zero runner and marked itself done |
-| DRC could not fail the gate | `float()` on `0.240um` raised `ValueError`, swallowed; 8 real violations parsed as clean |
-| The netlist was never in the prompt | the model was told to match a SPICE file it was never shown |
+| Defect                              | Evidence                                                                                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The model was shown almost nothing  | `report_summary()` greps matched nothing; the entire injected payload was three characters: `---`                                                                                                                         |
+| `report.txt` carried no verdict     | `report_verification.py` hunted a `*_full.lyrdb` the KLayout `macro` run does not always write, raised `FileNotFoundError` after printing only its header, leaving 918 bytes with no `DRC:`/`LVS:`/`RESULT:`              |
+| That failure was silent             | the pipeline ran under `if ! run_deterministic_steps...`, and POSIX shells suppress `set -e` for the whole command _including inside called functions_, so `step_report` ignored a non-zero runner and marked itself done |
+| DRC could not fail the gate         | `float()` on `0.240um` raised `ValueError`, swallowed; 8 real violations parsed as clean                                                                                                                                  |
+| The netlist was never in the prompt | the model was told to match a SPICE file it was never shown                                                                                                                                                               |
 
 All of that is fixed and pinned by tests. The packet now delivers ~9.5k tokens
 of exact ground truth per iteration.
 
 ### What is actually blocking convergence (measured)
 
-Once the model could *see* the problem, it stopped hunting for information and
+Once the model could _see_ the problem, it stopped hunting for information and
 started reasoning about the layout — and never stopped. Measured directly
 against the gateway, no agent CLI involved:
 
@@ -54,7 +54,7 @@ tokens of thinking and nothing suggests content appears at any budget.
 
 The uncomfortable part: blocks `[9]`/`[10]`/`[11]` did exactly what they were
 designed to do — the model stopped browsing `context/` and stopped hunting for
-`building_blocks.py` — and throughput got *worse*, because the recovered budget
+`building_blocks.py` — and throughput got _worse_, because the recovered budget
 went into reasoning about a problem that is too large to answer at once. Tool
 calls went 90 → 6 → 0 as the packet got richer. Better evidence cannot rescue
 an unanswerable objective.
@@ -79,6 +79,7 @@ an unanswerable objective.
 Read in this order. Everything below is current as of this plan.
 
 **Start here**
+
 1. `README.md` — architecture, the evidence packet, the two standing
    invariants, known trade-offs. The entry point.
 2. `ORCHESTRATION.md` — the harness in depth: `state.json`, every pipeline
@@ -86,34 +87,25 @@ Read in this order. Everything below is current as of this plan.
 3. `FLOW_IMPROVEMENT_PLAN.md` §4 Stage 5 — the original sketch this plan
    replaces. Note its Stages 3 and 4 are now **built**, not pending.
 
-**The code you will change**
-4. `orchestrate.sh` — `build_fix_prompt()` (prompt assembly), `request_fix()`,
-   `request_fix_and_build()`, the main loop. This is where Stage 5 lands.
-   Read the header comment first: it states the two invariants everything
-   else follows from.
-5. `scripts/evidence.py` — the packet builder. Blocks are `block_*` functions
-   assembled in `build_blocks()`; `BLOCK_CAPS` and `TRIM_ORDER` govern the
-   byte budget. You will add a per-gate objective block and trim the rest.
+**The code you will change** 4. `orchestrate.sh` — `build_fix_prompt()` (prompt assembly), `request_fix()`,
+`request_fix_and_build()`, the main loop. This is where Stage 5 lands.
+Read the header comment first: it states the two invariants everything
+else follows from. 5. `scripts/evidence.py` — the packet builder. Blocks are `block_*` functions
+assembled in `build_blocks()`; `BLOCK_CAPS` and `TRIM_ORDER` govern the
+byte budget. You will add a per-gate objective block and trim the rest.
 
-**The machinery Stage 5 needs, already built and tested**
-6. `scripts/score_iteration.py` — the objective function. **Every gate exit
-   criterion below is already a field on `Score`.** Read `Score` and the
-   weight constants.
-7. `scripts/ledger.py` — host-written per-iteration record, survives a
-   timeout, detects a stuck score. `render()` produces the prompt digest.
-8. `scripts/pick_reference_cells.py` — Stage 3's ranker. Structural
-   fingerprint + weighted distance over the 83-cell PDK corpus.
+**The machinery Stage 5 needs, already built and tested** 6. `scripts/score_iteration.py` — the objective function. **Every gate exit
+criterion below is already a field on `Score`.** Read `Score` and the
+weight constants. 7. `scripts/ledger.py` — host-written per-iteration record, survives a
+timeout, detects a stuck score. `render()` produces the prompt digest. 8. `scripts/pick_reference_cells.py` — Stage 3's ranker. Structural
+fingerprint + weighted distance over the 83-cell PDK corpus.
 
-**Reference, skim**
-9. `aion_layout/spice_parser.py` and `netlist_view.py` — the netlist model the
-   curriculum must be derived from. `Subckt.pins`, `.nets`, `.nmos_devices`,
-   `.pmos_devices`, `.output_net`, `.input_nets`.
-10. `aion_layout/building_blocks.py` — the drawing API the model calls.
-11. `SKILL.md`, `GDS_PYTHON_API.md` — domain guidance and API reference, both
-    named to the model in the prompt.
-12. `tests/` — 203 tests. `test_stage3_stage4.py` covers the scorer, ledger and
-    ranker; `test_shell_surface.py` asserts what the prompt must and must not
-    contain.
+**Reference, skim** 9. `aion_layout/spice_parser.py` and `netlist_view.py` — the netlist model the
+curriculum must be derived from. `Subckt.pins`, `.nets`, `.nmos_devices`,
+`.pmos_devices`, `.output_net`, `.input_nets`. 10. `aion_layout/building_blocks.py` — the drawing API the model calls. 11. `SKILL.md`, `GDS_PYTHON_API.md` — domain guidance and API reference, both
+named to the model in the prompt. 12. `tests/` — 203 tests. `test_stage3_stage4.py` covers the scorer, ledger and
+ranker; `test_shell_surface.py` asserts what the prompt must and must not
+contain.
 
 **Verify your environment before changing anything**
 
@@ -129,8 +121,8 @@ AION_DUMP_PROMPT=/tmp/p.txt ./orchestrate.sh AION_inv_nand2_nor2_1_minimized.spi
 
 **Hard requirement: nothing in the curriculum may be specific to
 `AION_inv_nand2_nor2_1`.** The user will generate other cells. Every gate's
-objective, its geometry hints and its exit criterion must be *derived from the
-parsed netlist and the measured artifacts*, never hardcoded.
+objective, its geometry hints and its exit criterion must be _derived from the
+parsed netlist and the measured artifacts_, never hardcoded.
 
 The existing scope guard (`tests/test_scope_guards.py`) already fails the build
 if cell-specific geometry leaks into model-visible files. Extend it to cover the
@@ -141,15 +133,15 @@ curriculum.
 Each gate is one narrow objective per model call. Exit criteria come straight
 from `Score`, so the curriculum and the grader cannot disagree.
 
-| # | Gate | Objective, derived from | Passes when |
-|---|---|---|---|
-| 1 | `build` | — | module imports and `generate()` writes a GDS |
-| 2 | `gates` | `{d.gate for d in subckt.devices}` | poly/active crossings == `len(devices)` |
-| 3 | `devices` | `subckt.nmos_devices`, `pmos_devices`, W/L per device | `score.device_delta == 0` |
-| 4 | `taps` | rails from `subckt.vdd_net`/`vss_net` | no `LU.a`/`LU.b` in `score.drc_by_rule` |
-| 5 | `pins` | `subckt.pins` | `score.disconnected == 0` and `unmatched_pins == 0` |
-| 6 | `nets` | `subckt` fanout table | `score.lvs_verdict == "match_uniquely"` |
-| 7 | `drc` | measured violations | `score.drc_violations == 0` |
+| #   | Gate      | Objective, derived from                               | Passes when                                         |
+| --- | --------- | ----------------------------------------------------- | --------------------------------------------------- |
+| 1   | `build`   | —                                                     | module imports and `generate()` writes a GDS        |
+| 2   | `gates`   | `{d.gate for d in subckt.devices}`                    | poly/active crossings == `len(devices)`             |
+| 3   | `devices` | `subckt.nmos_devices`, `pmos_devices`, W/L per device | `score.device_delta == 0`                           |
+| 4   | `taps`    | rails from `subckt.vdd_net`/`vss_net`                 | no `LU.a`/`LU.b` in `score.drc_by_rule`             |
+| 5   | `pins`    | `subckt.pins`                                         | `score.disconnected == 0` and `unmatched_pins == 0` |
+| 6   | `nets`    | `subckt` fanout table                                 | `score.lvs_verdict == "match_uniquely"`             |
+| 7   | `drc`     | measured violations                                   | `score.drc_violations == 0`                         |
 
 Gate 2 is deliberately first after build: it is the smallest objective that
 moves a real metric, and it is the one Kimi answered in 10 seconds.
@@ -230,7 +222,7 @@ to the context window, but the real constraint is reasoning time per turn).
 - **Kill runs with `SIGTERM`, not `-9`** — the EXIT/INT/TERM trap restores
   `context/` and `state.json`. Verified working.
 - `context/` is moved aside (not `chmod`ed) during a model call. `chmod 000`
-  makes ripgrep *abort* rather than skip, which broke the model's file search
+  makes ripgrep _abort_ rather than skip, which broke the model's file search
   and cost a whole run.
 - The scaffold starts with 4 `M1.d` minimum-area violations by design; see the
   comment in `aion_layout/auto_scaffold.py`. Do not "fix" it by shrinking
@@ -251,3 +243,9 @@ Fall back in this order, measuring each:
 4. **Reconsider the premise** — if no model on this gateway will write a
    standard-cell layout, the loop's value is the harness and the evidence, and
    the honest deliverable is a measurement of what these models cannot do.
+
+---
+
+## 8. If it works (or seems to)
+
+Create a .md file containing a schematic of the flow, what is mechanic and what is the llm doing.

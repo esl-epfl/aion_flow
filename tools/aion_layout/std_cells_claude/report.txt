@@ -1,0 +1,19 @@
+Cell:      AION_inv_nand2_nor2_1
+GDS:       std_cells_claude/AION_inv_nand2_nor2_1.gds
+Netlist:   AION_inv_nand2_nor2_1_minimized.spice
+Runs dir:  std_cells_claude
+
+DRC: PASS (magic=0, klayout=0)
+  Magic    : PASS - 0 violations (tool reported COUNT: 0)
+  KLayout  : PASS - 0 violations across 1 rule database
+    completeness: VERIFIED - receipt matches: all 1 rule database(s) the run wrote were read
+
+LVS: PASS (verdict=match_uniquely, tool=netgen)
+  Circuits match uniquely.
+  devices  : layout=8 schematic=8  ok
+  nets     : layout=9 schematic=9  ok
+  device counts by type:
+    ok       sg13_lv_nmos: layout=4 schematic=4
+    ok       sg13_lv_pmos: layout=4 schematic=4
+
+RESULT: PASS

@@ -50,9 +50,32 @@ def ledger_path(build_dir: Path) -> Path:
     return Path(build_dir) / "layout" / LEDGER_NAME
 
 
+def _is_repeat(build_dir: Path, record: Dict[str, Any]) -> bool:
+    """True when the last record already says exactly this about this iteration.
+
+    Re-running ``orchestrate.sh`` on an existing build directory re-grades the
+    current iteration before doing anything else -- correctly; the artifacts are
+    re-read rather than trusted.  Appending an identical row for it each time
+    makes three restarts look like three iterations that made no progress, which
+    is a different and much more alarming thing than one iteration graded three
+    times.  The digest is what the model reads to decide whether it is climbing
+    or wandering, so it has to distinguish them.
+    """
+    records = read(build_dir)
+    if not records:
+        return False
+    last = records[-1]
+    return all(
+        last.get(key) == record.get(key)
+        for key in ("iteration", "score", "stage", "lvs_verdict", "drc_violations")
+    )
+
+
 def append(build_dir: Path, record: Dict[str, Any]) -> Path:
     """Append one record.  Never raises: losing the run beats losing a note."""
     path = ledger_path(build_dir)
+    if _is_repeat(build_dir, record):
+        return path
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
@@ -99,8 +122,8 @@ def render(build_dir: Path, tail: int = DEFAULT_TAIL) -> str:
 
     shown = records[-tail:]
     lines = [
-        "iter  score      devices  nets  disc  pins  drc  lvs verdict          outcome",
-        "----  ---------  -------  ----  ----  ----  ---  -------------------  -------",
+        "iter  rung      score      devices  nets  disc  pins  drc  lvs verdict          outcome",
+        "----  --------  ---------  -------  ----  ----  ----  ---  -------------------  -------",
     ]
     prev_score: Optional[float] = None
     if len(records) > len(shown):
@@ -109,8 +132,9 @@ def render(build_dir: Path, tail: int = DEFAULT_TAIL) -> str:
     for rec in shown:
         score = rec.get("score")
         lines.append(
-            "{:<4}  {:<9}  {:<7}  {:<4}  {:<4}  {:<4}  {:<3}  {:<19}  {}".format(
+            "{:<4}  {:<8}  {:<9}  {:<7}  {:<4}  {:<4}  {:<4}  {:<3}  {:<19}  {}".format(
                 rec.get("iteration", "?"),
+                str(rec.get("stage", "") or "-")[:8],
                 f"{score:.0f}" if isinstance(score, (int, float)) else "?",
                 rec.get("device_delta", "?"),
                 rec.get("net_delta", "?"),
@@ -145,6 +169,17 @@ def render(build_dir: Path, tail: int = DEFAULT_TAIL) -> str:
             f"{len(scores)} iterations. Whatever is being changed is not what is "
             "wrong — re-read block [1] and block [2] before editing again."
         )
+
+    # A rung that never clears is a different failure from a wandering score,
+    # and it needs a different response: the objective is not being met, not
+    # merely met slowly.  Say which one is happening.
+    rungs = [r.get("stage") for r in shown if r.get("stage")]
+    if len(rungs) >= 3 and len(set(rungs)) == 1:
+        lines.append(
+            f"WARNING: rung {rungs[0]!r} has not been cleared in the last "
+            f"{len(rungs)} iterations. Read block [0] again: the turn is graded "
+            "on that one criterion, and nothing else you change will clear it."
+        )
     return "\n".join(lines)
 
 
@@ -161,7 +196,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     append_p.add_argument("--cell", required=True)
     append_p.add_argument("--iter-dir", required=True)
     append_p.add_argument("--outcome", default="")
-    append_p.add_argument("--stage", default="")
+    append_p.add_argument(
+        "--stage",
+        default="",
+        help="The curriculum rung this iteration was working on.",
+    )
+    append_p.add_argument(
+        "--netlist",
+        default=None,
+        help="Target netlist; supplies the curriculum's device-count target.",
+    )
 
     args = parser.parse_args(argv)
     build_dir = Path(args.build_dir)
@@ -173,7 +217,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from score_iteration import score_iteration  # noqa: E402
 
-    score = score_iteration(Path(args.iter_dir), args.cell)
+    score = score_iteration(
+        Path(args.iter_dir),
+        args.cell,
+        Path(args.netlist) if getattr(args, "netlist", None) else None,
+    )
     record: Dict[str, Any] = {"iteration": args.iteration, "outcome": args.outcome}
     if args.stage:
         record["stage"] = args.stage
@@ -189,6 +237,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "drc_violations": score.drc_violations,
             "drc_by_rule": score.drc_by_rule,
             "degraded": score.degraded,
+            "gate_crossings": score.gate_crossings,
+            "gate_crossings_required": score.gate_crossings_required,
         }
     )
     append(build_dir, record)

@@ -203,11 +203,21 @@ It is one text document with a header, numbered blocks, and a footer:
 | 6 | `EXTRACTED NETLIST` — what the tools see in the layout | 5000 |
 | 7 | `LAYOUT DIGEST` — shapes, ports and crossings taken from the generator module | 12000 |
 | 8 | `BUILD ERROR` — present only when the previous module failed the build gate | 5000 |
+| 9 | `DESIGN RULES` — every numeric rule, generated from `sg13g2_tech` | 6000 |
+| 10 | `API REFERENCE` — the callable surface by introspection, narrowed per rung | 8000 |
+| 11 | `REFERENCE CELL` — a different PDK cell, as an API example | 9000 |
+| 0 | `OBJECTIVE` — the curriculum rung this turn is graded on | never capped |
 
 The header names the cell, netlist, iteration directory, module and the blocks present; the footer
-gives the packet size against the budget (24 000 bytes by default) and names every block that was
-shortened. When the packet is over budget, `enforce_budget` shortens low-priority blocks first and
-never drops blocks 1–3.
+gives the packet size against the budget (26 000 bytes unscoped; a curriculum rung applies its own,
+smaller one on top) and names every block that was shortened. When the packet is over budget, block
+[11] — the only block that is not evidence about this run — is given up whole *and said to be given
+up*; only then does `enforce_budget` shorten low-priority blocks, and it never drops blocks 1–3.
+
+Since Stage 5 the packet is normally **scoped to one curriculum rung**: `evidence.py --gate auto`
+keeps only the blocks that rung declares and prepends block [0], the objective. `--gate off` emits
+the whole packet, which is what `final/evidence.txt` gets. See [FLOW.md](FLOW.md) for the per-rung
+block table.
 
 Three rules make the packet safe to put in front of a model, and they are the reason it exists:
 
@@ -235,8 +245,10 @@ calling `scripts/evidence.py` directly.
 Once an iteration's report says FAIL and iterations remain, `orchestrate.sh` assembles the whole
 prompt host-side and makes one call. The prompt contains:
 
-- the task framing and the fix-priority order (topology and connectivity, then shorts, then spacing
-  and enclosure, then area);
+- the task framing, and the objective for the current curriculum rung (block [0]) — one narrow
+  instruction with one measured exit criterion, not the whole cell;
+- the host-written ledger digest: what every previous iteration scored, and whether the rung is
+  stuck;
 - the tail of `BUILD_DIR/memory.md`, the model's own notes from previous iterations;
 - the complete evidence packet for the current iteration;
 - the complete current source of the iteration's module;

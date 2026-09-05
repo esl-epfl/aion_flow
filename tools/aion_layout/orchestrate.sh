@@ -7,7 +7,22 @@
 #  Description:               Agentic DRC/LVS fix loop for AION standard cells
 # ================================================================
 #
-# orchestrate.sh — v4.1
+# orchestrate.sh — v5.0
+#
+# ONE RUNG PER TURN.  The loop does not ask for a finished cell.  It derives a
+# ladder from the netlist (scripts/curriculum.py), finds the lowest rung the
+# measured score does not clear, and asks for that one thing -- showing only the
+# evidence that rung declares.  Measured, a whole-cell objective produced 64,167
+# characters of reasoning and zero output; one rung produced a module that
+# builds.  Every rung's exit test is a predicate over the same Score the ledger
+# records, so the curriculum and the grader cannot drift apart, and every one of
+# them fails closed: a rung whose measurement is missing has not been cleared.
+#
+# The loop also stops advancing unconditionally.  Each iteration is scored the
+# moment it is graded, the best score is remembered, and an iteration that
+# scores worse is rejected -- the next call branches from the best module
+# instead, via .base_iteration.  Nothing is copied to do it; the artifacts are
+# still on disk where they were written.
 #
 # Deterministic pipeline steps (GDS gen, render, DRC, LVS, report) run as
 # plain bash — no agent involved, so nothing there can hang on a tool
@@ -41,7 +56,14 @@
 # Environment:
 #   MODEL                    inference model id (see copilot-rcp.sh --list)
 #   CEFPROVIDER_API_KEY      inference gateway key; required for a real run
-#   FIX_TIMEOUT              wall-clock budget for one model call (default 10m)
+#   FIX_TIMEOUT              wall-clock budget for one model call (default 12m)
+#   MODEL_EFFORT             reasoning effort for the model call (default low).
+#                            At the CLI default the whole completion budget goes
+#                            to reasoning and the turn writes no code; see the
+#                            measurements beside MODEL_EFFORT below.
+#   AION_GATE                curriculum rung: "auto" (default) derives it from
+#                            the measured score, a rung key forces one, "off"
+#                            restores the pre-Stage-5 whole-cell objective
 #   MAX_MODEL_CALLS          global model-call budget, build-gate retries
 #                            included (default: MAX_ITERATIONS)
 #   MAX_BUILD_FAILURES       build-gate retries allowed inside one iteration,
@@ -64,9 +86,29 @@ source "${SCRIPT_DIR}/pipeline.sh"
 SPICE_NETLIST="${1:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERATIONS]}"
 BUILD_DIR="${2:?Usage: orchestrate.sh <SPICE_NETLIST> <BUILD_DIR> [MAX_ITERATIONS]}"
 MAX_ITERATIONS="${3:-10}"
-# MODEL="${MODEL:-openai/gpt-oss-120b}"
+# The default is measured, not chosen.  Same prompts, same gateway, same day:
+#
+#                        `gates` rung              `shorts` rung
+#   Kimi-K2.7-Code   45 s, 13,024 ch reasoning   NEVER ANSWERS: 158,775 ch of
+#                    -> a module that builds     reasoning at a 40,000-token
+#                                                budget, zero content, and the
+#                                                same at every smaller budget
+#   gpt-oss-120b     13 s,  3,079 ch reasoning   28 s, 10,551 ch reasoning
+#                    -> a module that builds     -> a module that builds AND
+#                                                   clears the rung
+#
+# The `shorts` rung is the one the loop was stuck on for four iterations.  Kimi
+# cannot close it -- not a budget problem, not a prompt problem; five separate
+# interventions are recorded in SUMMARY.md, all measured, none of which helped.
+# gpt-oss-120b answered it in 28 s on the first try, took the disconnected-node
+# count 4 -> 0 and the unmatched ports 10 -> 1, and improved the score 4500 ->
+# 3940.  It is also ~167 tok/s against ~90.
+#
+# Kimi remains selectable and is the better documented failure; Qwen3.5 fails on
+# the whole-cell objective exactly as Kimi does and is untested per-rung.
+MODEL="${MODEL:-openai/gpt-oss-120b}"
+# MODEL="${MODEL:-moonshotai/Kimi-K2.7-Code}"
 # MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B}"
-MODEL="${MODEL:-moonshotai/Kimi-K2.7-Code}"
 
 COPILOT_RCP="${COPILOT_RCP:-/home/filippoquadri/phd/aion/copilot-rcp.sh}"
 OPENCODE_RCP="${OPENCODE_RCP:-/home/filippoquadri/phd/aion/opencode-rcp.sh}"
@@ -101,7 +143,68 @@ BUILD_DIR="$(pipeline_abspath "$BUILD_DIR")"
 
 STATE_FILE="${BUILD_DIR}/layout/state.json"
 MEMORY_FILE="${BUILD_DIR}/memory.md"
-FIX_TIMEOUT="${FIX_TIMEOUT:-10m}"
+
+# Wall-clock budget for one model call.  Re-derived from measurement against the
+# gateway, not guessed:
+#
+#   End to end through copilot, Kimi-K2.7-Code, the `gates` rung of the fixture
+#   cell (a 25 KB / ~6.3k-token prompt):
+#       193 s  to write the module
+#       208 s  to finish (module + a note to memory.md)
+#   -> the module built, raised the poly/active crossings 6 -> 8, took the
+#      device delta 2 -> 0, and advanced the curriculum from `gates` to `taps`.
+#
+#   But the rungs are not equally hard, and the reasoning scales with the rung:
+#       gates  rung : 13,024 ch of reasoning -> answers in 45 s raw
+#       shorts rung : 44,653 ch             -> exceeds a 12,000-token budget
+#       pins   rung : 42,914 ch             -> exceeds a 12,000-token budget
+#   At ~91 tok/s that is ~11k tokens, ~130 s of pure thinking before the first
+#   character of output, and through copilot it is more: its own ~12.6k-token
+#   system prompt is re-sent every turn.  A 6m budget was enough for `gates` and
+#   NOT enough for `shorts` -- that turn produced no tool call at all.
+#
+# 12m is sized to the hardest rung measured, not the easiest.  It is still well
+# under the 79 minutes copilot-rcp.sh's 262144-token output cap would allow (see
+# SUMMARY.md), and a hung call still costs minutes rather than an hour.
+#
+# Note what this number cannot fix: an EXPLORING turn blows any budget.  The
+# first run of this curriculum spent a whole 6m on two `ls` calls and a later one
+# spent it reading GDS_PYTHON_API.md.  The fix for that is in the prompt -- write
+# the module first, open nothing -- not in a bigger number here.
+FIX_TIMEOUT="${FIX_TIMEOUT:-12m}"
+
+# Reasoning effort for the model call.
+#
+# Read the measurements before changing this, because the obvious reading of
+# them is wrong.  Same prompt (one rung, 11 KB), same model, measured directly
+# against the gateway:
+#
+#     effort=default, max_tokens  4000 : reason 15,405 ch, content 0     length
+#     effort=low,     max_tokens  8000 : reason 24,684 ch, content 2,933 stop
+#     effort=DEFAULT, max_tokens  8000 : reason 13,024 ch, content 2,600 stop
+#
+# The third line is the control, and it is the important one: at the DEFAULT
+# effort and the larger budget the model returns a clean module in 45 s.  So
+# --reasoning-effort low did nothing -- on this gateway Kimi treats "low" and
+# "minimal" exactly as it treats the default (a 34-token prompt returns 121
+# characters of reasoning at all three).  The variable that mattered was the
+# COMPLETION BUDGET: 4000 tokens is spent before the reasoning ends, 8000 is not.
+#
+# Only "none" actually suppresses reasoning, and it is a trap: the thinking does
+# not disappear, it moves into the content channel, and the reply becomes 25 KB
+# of prose with the module somewhere inside it.
+#
+# The flag is kept because it is free, it is honest about what was tried, and it
+# matters for the other models on this gateway.  It is NOT what unblocked the
+# loop.  What unblocked the loop is the curriculum: one rung needs ~3.2k tokens
+# of reasoning where the whole cell needed more than 16k and never finished.
+MODEL_EFFORT="${MODEL_EFFORT:-low}"
+
+# The curriculum: which rung of the ladder this run asks for.  "auto" derives it
+# from the measured score (scripts/curriculum.py), a rung key forces one, and
+# "off" restores the pre-Stage-5 whole-cell objective and the whole packet.
+AION_GATE="${AION_GATE:-auto}"
+export AION_GATE
 
 # Build-gate retries allowed inside one iteration.  Each one is a *model call*
 # and spends from the global budget below: three silent retries used to burn
@@ -246,8 +349,12 @@ GUARD_ARMED=0
 # run in progress.  Additions go here.
 GUARD_GRADERS=(
     "aion_layout/verification.py"
+    "aion_layout/layout_metrics.py"
     "scripts/report_verification.py"
     "scripts/evidence.py"
+    "scripts/curriculum.py"
+    "scripts/score_iteration.py"
+    "scripts/ledger.py"
     "scripts/generate_cell.py"
     "scripts/docker_run.sh"
     "pipeline.sh"
@@ -488,12 +595,13 @@ evidence_packet_direct() {
     local build_err="${1:-}" n iter_dir mod out err rc=0
     local -a args
 
-    n="$(state_read '.current_iteration' 2>/dev/null || echo 0)"
+    n="$(pipeline_base_iteration 2>/dev/null || echo 0)"
     case "$n" in '' | *[!0-9]*) n=0 ;; esac
     iter_dir="${BUILD_DIR}/layout/iteration_${n}"
     mod="${iter_dir}/${CELL_NAME}.py"
 
-    args=(--netlist "$SPICE_NETLIST" --iter-dir "$iter_dir" --cell "$CELL_NAME")
+    args=(--netlist "$SPICE_NETLIST" --iter-dir "$iter_dir" --cell "$CELL_NAME"
+          --gate "${AION_GATE:-off}")
     [[ -f "$mod" ]] && args+=(--module "$mod")
     [[ -n "$build_err" && -s "$build_err" ]] && args+=(--build-error-file "$build_err")
 
@@ -580,6 +688,116 @@ status_is_backed_by_report() {
     report_passed_at "${BUILD_DIR}/layout/iteration_${n}/report.txt"
 }
 
+# ---- curriculum, score and ledger ----------------------------------------
+#
+# Stage 5.  The loop used to advance unconditionally on whatever the model
+# wrote and to ask for a whole cell every turn.  Both are fixed here:
+#
+#   * every iteration is scored the moment it is graded, and the score is
+#     appended to a host-written ledger that survives a timeout;
+#   * the best score seen is remembered, and an iteration that scores worse is
+#     REJECTED -- the next call branches from the best module instead of from
+#     the regression, which is what stops the run being a random walk;
+#   * the model is asked for one rung of a ladder derived from the netlist, and
+#     the rung is chosen by the same Score the ledger records, so the
+#     curriculum and the grader cannot drift apart.
+
+# Print the curriculum rung for an iteration directory, or "" if it cannot be
+# derived.  Never fatal: no rung means the packet falls back to the whole
+# thing, which is worse but not wrong.
+#   $1 = iteration directory
+current_gate_key() {
+    local iter_dir="$1" key=""
+    key="$(timeout -k 5 60 python3 "${SCRIPT_DIR}/scripts/curriculum.py" \
+        --netlist "$SPICE_NETLIST" --cell "$CELL_NAME" \
+        --iter-dir "$iter_dir" --print key 2>/dev/null || true)"
+    printf '%s' "${key//[$'\n\r']/}"
+}
+
+# Print an iteration's total score, or "" when it could not be computed.
+#   $1 = iteration directory
+score_total() {
+    local iter_dir="$1" out=""
+    out="$(timeout -k 5 120 python3 "${SCRIPT_DIR}/scripts/score_iteration.py" \
+        --iter-dir "$iter_dir" --cell "$CELL_NAME" --netlist "$SPICE_NETLIST" \
+        --json 2>/dev/null || true)"
+    [[ -n "$out" ]] || return 0
+    printf '%s' "$out" | jq -r '.total // empty' 2>/dev/null || true
+}
+
+# Append one scored iteration to the ledger, tagged with the rung it was on.
+#   $1 = iteration number, $2 = iteration directory, $3 = outcome, $4 = rung
+record_iteration() {
+    local n="$1" iter_dir="$2" outcome="$3" gate="$4"
+    timeout -k 5 120 python3 "${SCRIPT_DIR}/scripts/ledger.py" \
+        --build-dir "$BUILD_DIR" append \
+        --iteration "$n" --cell "$CELL_NAME" --iter-dir "$iter_dir" \
+        --netlist "$SPICE_NETLIST" \
+        --outcome "$outcome" --stage "$gate" 2>/dev/null || true
+}
+
+# Compare this iteration against the best seen and set .base_iteration to
+# whichever the next call should work from.
+#
+# The comparison is `<=`, not `<`: an equal score means the model moved
+# sideways, and preferring the newer of two equal layouts is what lets a run
+# escape a plateau instead of re-sending the same source until the budget ends.
+#   $1 = iteration number, $2 = its score (may be empty)
+# Prints the accept/reject outcome on stdout.
+accept_or_reject() {
+    local n="$1" score="$2" best best_iter
+
+    if [[ -z "$score" ]]; then
+        # Unscored is not "as good as the best".  Keep whatever base we had.
+        state_note ".unscored_iterations = ((.unscored_iterations // 0) + 1)"
+        echo "unscored"
+        return 0
+    fi
+
+    best="$(state_read '.best_score // empty')"
+    best_iter="$(state_read '.best_iteration // empty')"
+
+    if [[ -z "$best" || "$best" == "null" ]] ||
+        awk "BEGIN{exit !($score <= $best)}"; then
+        state_note ".best_score = ${score} | .best_iteration = ${n} | .base_iteration = ${n}"
+        echo "accepted"
+        return 0
+    fi
+
+    # Worse than the best. Branch from the best module rather than this one:
+    # the artifacts for it are still on disk, so this costs no re-verification.
+    state_note ".base_iteration = ${best_iter}
+              | .rejected_iterations = ((.rejected_iterations // 0) + 1)"
+    echo "rejected (score ${score} > best ${best} at iteration ${best_iter}; branching from there)"
+    return 0
+}
+
+# Record a rung change in the ledger, so a stuck rung is visible as a stuck
+# rung rather than as a flat score somebody has to interpret.
+#   $1 = the rung now current
+note_gate_transition() {
+    local gate="$1" previous
+    previous="$(state_read '.gate // empty')"
+    [[ -n "$gate" ]] || return 0
+    if [[ "$previous" != "$gate" ]]; then
+        state_note ".gate = $(json_str "$gate")
+                  | .gate_history = ((.gate_history // []) + [$(json_str "$gate")])"
+        if [[ -n "$previous" && "$previous" != "null" ]]; then
+            print_banner "\033[36m" "CURRICULUM: ${previous} -> ${gate}"
+        fi
+    else
+        state_note ".gate_repeats = ((.gate_repeats // 0) + 1)"
+    fi
+    # Explicit, and not decoration.  A bare `&&` as the last line of a function
+    # IS the function's exit status: this ended with
+    #     [[ -n "$previous" ... ]] && print_banner ...
+    # which is false on the first iteration, when there is no previous rung.
+    # The function returned 1, `set -e` killed the loop between scoring
+    # iteration 0 and the max-iterations check, and the run left
+    # status:in_progress with no banner and no explanation.
+    return 0
+}
+
 # ---- build gate ----------------------------------------------------------
 
 # Actually build the module the way the pipeline will: import it, call
@@ -653,16 +871,16 @@ timeout_seconds() {
     local spec="$1" num unit
     num="${spec%%[!0-9]*}"
     unit="${spec#"$num"}"
-    [[ -z "$num" ]] && {
-        echo 600
-        return
-    }
+    # A value this cannot parse is one `timeout` will reject too, so guessing a
+    # fallback here only makes deadline.epoch disagree with the real kill time:
+    # selfcheck.sh then tells the model it has budget left that does not exist.
+    [[ -z "$num" ]] && fatal "FIX_TIMEOUT='${spec}' is not a duration (e.g. 90, 6m, 1h)"
     case "$unit" in
     "" | s) echo "$num" ;;
     m) echo $((num * 60)) ;;
     h) echo $((num * 3600)) ;;
     d) echo $((num * 86400)) ;;
-    *) echo 600 ;;
+    *) fatal "FIX_TIMEOUT='${spec}' has an unknown unit '${unit}' (use s, m, h or d)" ;;
     esac
 }
 
@@ -679,21 +897,57 @@ write_deadline() {
 #   $1 = the evidence packet, already built by evidence_packet
 build_fix_prompt() {
     local packet="${1:?build_fix_prompt needs an evidence packet}"
-    local n src next_mod work_dir iter_dir report memory evidence_preamble
+    local n cur src next_mod work_dir iter_dir report memory evidence_preamble
+    local ledger_digest branch_note="" rules_note
 
-    n="$(state_read '.current_iteration')"
+    # The next module always lands after the CURRENT iteration, but the source
+    # and the evidence come from the BASE one -- the best iteration seen, which
+    # is the same thing until a regression is rejected.  Showing a rejected
+    # module as "the current source" is how a run keeps editing the worse of two
+    # layouts it already has on disk.
+    cur="$(state_read '.current_iteration')"
+    n="$(pipeline_base_iteration)"
     iter_dir="${BUILD_DIR}/layout/iteration_${n}"
     src="${iter_dir}/${CELL_NAME}.py"
     report="${iter_dir}/report.txt"
-    next_mod="${BUILD_DIR}/layout/iteration_$((n + 1))/${CELL_NAME}.py"
+    next_mod="${BUILD_DIR}/layout/iteration_$((cur + 1))/${CELL_NAME}.py"
+    if [[ "$n" != "$cur" ]]; then
+        branch_note="NOTE: iteration ${cur} scored worse than iteration ${n} and was rejected. You are
+working from iteration ${n}, the best version so far. The change that caused the
+regression is not in the source below -- do not reapply it.
+
+"
+    fi
     # Outside the iteration tree on purpose: a self-check writing its own DRC
     # and LVS output into iteration_N+1/ made the next evidence packet read the
     # model's own scratch runs back as if they were the host's measurements.
-    work_dir="${BUILD_DIR}/selfcheck/iteration_$((n + 1))"
+    work_dir="${BUILD_DIR}/selfcheck/iteration_$((cur + 1))"
+
+    # The host-written history.  memory.md is the model's own scratchpad and is
+    # 0 bytes after every run so far -- it is written last, inside a hard
+    # timeout, so it is the first thing lost.  The ledger does not depend on the
+    # model finishing, and it is what shows a flat score or a stuck rung.
+    ledger_digest="$(timeout -k 5 30 python3 "${SCRIPT_DIR}/scripts/ledger.py" \
+        --build-dir "$BUILD_DIR" render 2>/dev/null || true)"
+    [[ -n "${ledger_digest//[[:space:]]/}" ]] ||
+        ledger_digest="(no iterations scored yet.)"
 
     memory="$(tail -c "$MEMORY_INLINE_BYTES" "$MEMORY_FILE" 2>/dev/null || true)"
     if [[ -z "${memory//[[:space:]]/}" ]]; then
         memory="(no notes yet — this is the first pass, or nothing was recorded.)"
+    fi
+
+    # Cross-references are generated from the packet in hand, never asserted.
+    if [[ "$packet" == *"===== [9] "* ]]; then
+        rules_note="Every numeric design rule is in block [9] of the packet — widths, spacings,
+enclosures, cut sizes, the routing grid, the standard-cell frame — generated from
+the technology object the API itself reads. Do not go looking for them: the PDK
+rule decks under ./context are not readable from this session."
+    else
+        rules_note="This turn does not need the design-rule table, so it is not inlined; the rung
+in block [0] is about connectivity, not geometry. If you genuinely need a rule
+value, ./GDS_PYTHON_API.md states them — the PDK rule decks under ./context are
+not readable from this session."
     fi
 
     # "Everything you need is inlined below, do not go looking for more" is true
@@ -727,25 +981,35 @@ the packet is degraded. Read those and nothing else."
 You are a physical-design engineer working on a standard cell for the IHP SG13G2
 130 nm PDK. A single Python module draws the cell through the AION layout API; the
 host builds its GDS, runs Magic and KLayout DRC and Netgen LVS against the target
-SPICE netlist, and grades the result. Your job this turn is to produce the next
-version of that module so the layout implements the netlist exactly and passes DRC
-and LVS.
+SPICE netlist, and grades the result.
 
-${evidence_preamble}
+The cell is built one rung at a time, and this turn is ONE RUNG. Block [0] states
+which one, what to do, the number it is measured on and the criterion that clears
+it. Do that and nothing else: the later rungs are later turns, and work spent on
+them now does not move the score.
 
-Every numeric design rule is in block [9] of the packet — widths, spacings,
-enclosures, cut sizes, the routing grid, the standard-cell frame — generated from
-the technology object the API itself reads. Do not go looking for them: the PDK
-rule decks under ./context are not readable from this session.
+${branch_note}${evidence_preamble}
 
-Two files are worth opening only if you are genuinely stuck on the API: ./SKILL.md
-(domain guidance) and ./GDS_PYTHON_API.md (API reference). Nothing else.
+${rules_note}
 
-Fix problems in this order: topology and connectivity first (every device present,
-every gate/drain/source on the net the netlist names, every port reachable), then
-DRC shorts, then DRC spacing and enclosure, then area. Never trade connectivity for
-area, and never change the SPICE netlist to match the layout — the netlist is the
-specification.
+Do not open any file. Measured on this harness, a single read of
+./GDS_PYTHON_API.md consumed an entire turn's budget and the module was never
+written — twice. Every signature you need is in block [10], generated by
+introspecting the very code you are calling, so it cannot be out of date. If
+something is genuinely missing from what you were given, write the module using
+what you do have and say so in your note.
+
+The rungs are ordered so that connectivity is settled before geometry: a layout
+that implements the wrong circuit cannot be repaired by moving shapes. Never trade
+connectivity for area, and never change the SPICE netlist to match the layout —
+the netlist is the specification.
+
+============================ SCORED HISTORY (host-written) ============================
+Lower is better; 0 is DRC- and LVS-clean. This table is written by the host from
+the artifacts, so it is there even for a turn that ran out of time.
+
+${ledger_digest}
+========================== END SCORED HISTORY ==========================
 
 ========================= NOTES FROM PREVIOUS ITERATIONS =========================
 (${MEMORY_FILE})
@@ -761,35 +1025,49 @@ $(cat "$src" 2>/dev/null || echo "(source not available at ${src})")
 
 ================================== YOUR TASK ==================================
 
-1. DIAGNOSE. From the evidence above, name the highest-priority defect and the
-   smallest change to the generator that fixes it. Prefer targeted edits over a
-   redesign.
+Your budget is ${FIX_TIMEOUT} of wall clock and every tool call spends a large
+slice of it. Do not explore. These are already true and do not need checking:
+the directory below exists, ${MEMORY_FILE} exists, and everything you need to
+decide is in this prompt.
 
-2. RECORD WHAT YOU LEARNED — do this now, before you start editing, not at the
-   end. Append one entry to ${MEMORY_FILE} covering: what you concluded from the
-   evidence, what you are about to change and why, and what to watch for next
-   time. Doing this first means the note survives even if you run out of time.
-
-3. WRITE THE FIX. Write the complete corrected Python module — the whole file,
-   not a patch — to:
+1. WRITE THE FIX — FIRST, before anything else. USE YOUR FILE-EDITING TOOL to
+   create this file:
        ${next_mod}
-   It must define generate(cell_name, tech) -> Cell. Do not modify ${src} or any
-   other iteration's files.
+   It must contain the complete corrected Python module, the whole file and not
+   a patch.
+
+   Printing the module in your reply does not count and is not graded. The host
+   reads that path off the disk after you stop; if nothing is there, the turn
+   produced nothing, however the reply describes it. Create the file, then say
+   what you changed in one or two sentences.
+   It must define generate(cell_name, tech) -> Cell. Read block [0], make the one
+   change that clears THAT rung, and change nothing else: a redesign restarts the
+   ladder from the bottom. Do not modify ${src} or any other iteration's files.
+
+   Write it first because a turn that runs out of time after writing the module
+   still counts — the host grades whatever is at that path — and a turn that runs
+   out of time before writing it produced nothing at all.
 
    Those two paths are the only files you may write. Everything else — the
    pipeline, the checkers, the verification state — is snapshotted before this
    turn and restored after it, so editing any of it changes no verdict and is
    recorded against this run.
 
-4. SELF-CHECK (optional but recommended). This one command runs the identical
+2. SELF-CHECK (optional). This one command runs the identical
    build -> DRC -> LVS -> report chain the host will use to grade you, and prints
    the same verdict:
        ./scripts/selfcheck.sh ${next_mod} ${work_dir}
-   You may run up to 5 rounds of edit-and-check inside a ${FIX_TIMEOUT} budget.
-   Each round takes real time, so make the edit worth checking.
+   At most one round, and only if you have real doubt: it runs the actual tools
+   and takes minutes out of the same budget.
 
-5. STOP. Once ${next_mod} is written and you are done checking it, stop. Do not
-   run anything else.
+3. NOTE WHAT YOU CHANGED. Append one short entry to ${MEMORY_FILE}: what you
+   concluded from the evidence, what you changed, and what to watch next time.
+   Keep it to a few lines. The host already records the scores, so this is for
+   the reasoning behind them, not the numbers.
+
+4. STOP. Once ${next_mod} exists on disk, stop. Do not run anything else.
+   Before you stop, confirm to yourself that you actually called the edit tool —
+   describing the change is not making it.
 EOF
 }
 
@@ -806,6 +1084,10 @@ request_fix() {
     src="${BUILD_DIR}/layout/iteration_${n}/${CELL_NAME}.py"
     next_mod="${BUILD_DIR}/layout/iteration_$((n + 1))/${CELL_NAME}.py"
     mkdir -p "$(dirname "$next_mod")" "${BUILD_DIR}/selfcheck/iteration_$((n + 1))"
+    # The prompt tells the model these already exist so it does not spend a tool
+    # call finding out.  Measured: a turn died having spent its whole budget on
+    # two `ls` calls checking exactly this.
+    [[ -e "$MEMORY_FILE" ]] || : >"$MEMORY_FILE"
 
     # Every model call is charged against one global budget, whatever the reason
     # for it: a build-gate retry costs exactly as much wall clock and money as a
@@ -845,12 +1127,13 @@ request_fix() {
     if [[ "$AGENT_CLI" == "opencode" ]]; then
         # --auto approves tool use without a prompt; there is no interactive
         # terminal here and a permission prompt would hang until FIX_TIMEOUT.
-        timeout "$FIX_TIMEOUT" "$OPENCODE_RCP" - "$MODEL" -- \
+        timeout -k 10 "$FIX_TIMEOUT" "$OPENCODE_RCP" - "$MODEL" -- \
             run "$prompt" \
             --auto \
             --dir "$SCRIPT_DIR"
     else
-        timeout "$FIX_TIMEOUT" "$COPILOT_RCP" - "$MODEL" -p "$prompt" \
+        timeout -k 10 "$FIX_TIMEOUT" "$COPILOT_RCP" - "$MODEL" -p "$prompt" \
+            --reasoning-effort "$MODEL_EFFORT" \
             --allow-tool view \
             --allow-tool edit \
             --allow-tool bash \
@@ -868,17 +1151,34 @@ request_fix() {
 
     echo
 
+    # The module is checked BEFORE the exit status, deliberately.  `timeout`
+    # returns 124, and a model that wrote a complete module at t=500s and was
+    # still talking at t=600s used to have that module thrown away unread and
+    # the whole run aborted -- the most expensive possible way to lose work that
+    # was already on disk.  What the turn was asked to produce is the module; if
+    # it is there, the turn produced it, whatever the CLI did afterwards.
+    if [[ -f "$next_mod" ]]; then
+        if [[ $rc -ne 0 ]]; then
+            if ((rc == 124 || rc == 137)); then
+                echo "!! ${AGENT_CLI} hit FIX_TIMEOUT=${FIX_TIMEOUT} — but it had already written" >&2
+                echo "   ${next_mod}, so the build gate grades that." >&2
+                state_note '.model_call_timeouts = ((.model_call_timeouts // 0) + 1)'
+            else
+                echo "!! ${AGENT_CLI} exited with status $rc after writing ${next_mod};" >&2
+                echo "   grading what it wrote." >&2
+                state_note '.model_call_errors = ((.model_call_errors // 0) + 1)'
+            fi
+        fi
+        return 0
+    fi
+
     if [[ $rc -ne 0 ]]; then
-        echo "!! ${AGENT_CLI} exited with status $rc" >&2
+        echo "!! ${AGENT_CLI} exited with status $rc and wrote no module" >&2
         return 1
     fi
 
-    if [[ ! -f "$next_mod" ]]; then
-        echo "!! Agent finished but did not write ${next_mod}" >&2
-        return 1
-    fi
-
-    return 0
+    echo "!! Agent finished but did not write ${next_mod}" >&2
+    return 1
 }
 
 # Record a build-gate failure durably.  An overwritten build_error.txt was the
@@ -919,9 +1219,23 @@ request_fix_and_build() {
     next_mod="${BUILD_DIR}/layout/iteration_$((n + 1))/${CELL_NAME}.py"
     err_file="${BUILD_DIR}/layout/iteration_$((n + 1))/build_error.txt"
 
+    local gate_before="${AION_GATE:-auto}"
+
     for ((attempt = 1; attempt <= MAX_BUILD_FAILURES; attempt++)); do
         rc=0
+        # A retry is answering a traceback, so it is on the `build` rung whatever
+        # the ladder said before.  Without this the model is handed, say, the
+        # "add well and substrate taps" objective while staring at an
+        # ImportError -- an objective it cannot act on and cannot be graded on,
+        # because nothing about the layout is measurable until it builds.
+        if [[ -n "$build_err" ]]; then
+            export AION_GATE=build
+        else
+            export AION_GATE="$gate_before"
+        fi
+
         request_fix "$build_err" || rc=$?
+        export AION_GATE="$gate_before"
         ((rc == 0)) || return "$rc"
 
         echo ">> Build gate: importing ${next_mod} and calling generate(${CELL_NAME}, sg13g2_tech)..."
@@ -982,7 +1296,7 @@ esac
 
 guard_init
 
-print_banner "\033[36m" "AION LAYOUT ORCHESTRATION v4.1"
+print_banner "\033[36m" "AION LAYOUT ORCHESTRATION v5.0"
 echo "Cell: $CELL_NAME | Netlist: $SPICE_NETLIST | Build dir: $BUILD_DIR | Max iter: $MAX_ITERATIONS | Model: $MODEL"
 echo "Model-call budget: $(state_read '.model_calls // 0') / ${MAX_MODEL_CALLS} used | build-gate retries per iteration: ${MAX_BUILD_FAILURES}"
 echo
@@ -1025,6 +1339,35 @@ for ((i = 0; i < MAX_ITERATIONS; i++)); do
     iteration_verdict="$(host_verdict "${BUILD_DIR}/layout/iteration_${n}/report.txt")"
     state_note ".last_result = \"${iteration_verdict}\""
     echo "Host verdict for iteration ${n}: ${iteration_verdict}"
+
+    iter_dir="${BUILD_DIR}/layout/iteration_${n}"
+    iter_gate="$(current_gate_key "$iter_dir")"
+    iter_score="$(score_total "$iter_dir")"
+    decision="$(accept_or_reject "$n" "$iter_score")"
+    record_iteration "$n" "$iter_dir" "$decision" "$iter_gate"
+
+    # The rung the NEXT call gets is the rung of the iteration it works from,
+    # which after a rejection is the best one rather than this one.
+    base_n="$(pipeline_base_iteration)"
+    if [[ "$base_n" == "$n" ]]; then
+        next_gate="$iter_gate"
+    else
+        next_gate="$(current_gate_key "${BUILD_DIR}/layout/iteration_${base_n}")"
+    fi
+    note_gate_transition "$next_gate"
+
+    # Pin the rung for this call rather than leaving it at "auto".  The model
+    # inherits this variable, so its own ./scripts/selfcheck.sh scores its new
+    # module against the SAME rung it was asked to clear -- "did I do the thing"
+    # -- instead of re-deriving a rung from its own workdir and being handed a
+    # different objective halfway through the turn.
+    if [[ -n "$next_gate" ]]; then
+        export AION_GATE="$next_gate"
+    fi
+
+    echo "Score for iteration ${n}: ${iter_score:-unscored}  rung: ${iter_gate:-unknown}  -> ${decision}"
+    [[ "$base_n" == "$n" ]] ||
+        echo "Next call works from iteration ${base_n} (rung: ${next_gate:-unknown})"
 
     if report_passed; then
         print_banner "\033[32m" "SUCCESS: DRC AND LVS PASSED CLEANLY AT ITERATION ${n}"
@@ -1076,6 +1419,22 @@ if [[ "$final_status" == "verified_clean" ]] && ! status_is_backed_by_report; th
 fi
 if [[ "$final_status" == "verified_clean" || "$final_status" == "max_iterations_reached" ]]; then
     n="$(state_read '.current_iteration')"
+
+    # A clean run ships the iteration that passed.  A run that ran out of
+    # iterations ships the BEST one it found, which is not always the last: the
+    # max-iterations break fires before the next pass can reject a regression,
+    # so finalising the newest used to hand over the worse of two layouts the
+    # run already had on disk while the ledger recorded the better one.
+    if [[ "$final_status" == "max_iterations_reached" ]]; then
+        best_n="$(state_read '.best_iteration // empty')"
+        if [[ "$best_n" =~ ^[0-9]+$ ]] && [[ "$best_n" != "$n" ]] &&
+            [[ -s "${BUILD_DIR}/layout/iteration_${best_n}/${CELL_NAME}.gds" ]]; then
+            echo ">> Finalising iteration ${best_n} (score $(state_read '.best_score // "?"')), not ${n}: it scored best."
+            state_note ".finalized_iteration = ${best_n} | .finalized_instead_of = ${n}"
+            n="$best_n"
+        fi
+    fi
+
     iter_dir="${BUILD_DIR}/layout/iteration_${n}"
     final_dir="${BUILD_DIR}/layout/final"
     mkdir -p "$final_dir"
@@ -1091,7 +1450,7 @@ if [[ "$final_status" == "verified_clean" || "$final_status" == "max_iterations_
         fi
     done
 
-    evidence_packet >"${final_dir}/evidence.txt"
+    AION_GATE=off evidence_packet >"${final_dir}/evidence.txt"
 
     state_write_atomic '.status = "finalized"'
 

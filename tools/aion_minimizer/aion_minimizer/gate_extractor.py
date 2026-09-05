@@ -168,22 +168,27 @@ def _evaluate_gate(
 
 
 def extract_gate_functions(
-    subckts: Dict[str, Subcircuit]
+    subckts: Dict[str, Subcircuit],
+    skipped: Optional[Dict[str, str]] = None,
 ) -> Dict[str, GateFunction]:
     """Extract Boolean functions for all valid gate-definition subckts.
 
-    Cells that do not look like single-output combinational gates (e.g.
-    decoupling capacitors) are silently skipped.
+    Cells that do not look like single-output combinational gates — flip-flops,
+    decoupling capacitors, tie cells — are skipped.  Pass ``skipped`` to collect
+    the reason for each, so that a later "unknown gate cell" can say why the
+    cell was not available instead of just that it was missing.
     """
     functions: Dict[str, GateFunction] = {}
     for name, sub in subckts.items():
         if not sub.is_gate_definition:
+            if skipped is not None:
+                skipped[name] = "contains no transistors"
             continue
         try:
             functions[name] = extract_gate_function(sub)
-        except ValueError:
-            # Not a recognizable combinational gate (no unique output, etc.).
-            pass
+        except ValueError as exc:
+            if skipped is not None:
+                skipped[name] = str(exc)
     return functions
 
 

@@ -2,34 +2,36 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from itertools import permutations
 from typing import TYPE_CHECKING
+
+from aion_opt.pattern.canonical import canonicalize_named
 
 if TYPE_CHECKING:
     from aion_opt.graph.circuit import Circuit
+
+#: ``(src_inst, src_pin, dst_inst, dst_pin, net_name)``
+PinEdge = tuple[str, str, str, str, str]
+#: ``(net_name, inst, pin)``
+BoundaryEntry = tuple[str, str, str]
 
 
 @dataclass(frozen=True)
 class Pattern:
     """An abstract combinational pattern plus one concrete occurrence.
 
-    The canonical key ignores the concrete instance names so that two
-    structurally identical occurrences map to the same pattern.
+    The :attr:`canonical_key` ignores the concrete instance names, so two
+    structurally identical occurrences map to the same pattern -- and therefore
+    to the same generated cell.  The key also encodes the boundary pins, so any
+    two occurrences sharing a key are guaranteed to have identical port maps.
     """
 
     instances: frozenset[str]
     node_types: dict[str, str]  # instance name -> collapsed cell type
-    internal_edges: tuple[
-        tuple[str, str, str, str, str], ...
-    ]  # (src, src_pin, dst, dst_pin, net_name)
-    boundary_inputs: tuple[
-        tuple[str, str, str], ...
-    ]  # (net_name, dst_inst, dst_pin)
-    boundary_outputs: tuple[
-        tuple[str, str, str], ...
-    ]  # (net_name, src_inst, src_pin)
+    internal_edges: tuple[PinEdge, ...]
+    boundary_inputs: tuple[BoundaryEntry, ...]
+    boundary_outputs: tuple[BoundaryEntry, ...]
     canonical_key: str = field(compare=True)
 
     def __hash__(self) -> int:
@@ -44,117 +46,79 @@ class Pattern:
         return len(self.instances)
 
     def canonical_node_order(self) -> dict[str, int]:
-        """Return the canonical relabeling of instances to indices 0..n-1."""
-        instances = sorted(self.node_types.keys())
-        n = len(instances)
-        if n == 0:
-            return {}
+        """Return the canonical relabelling of instances to indices ``0..n-1``.
 
-        best: str | None = None
-        best_mapping: dict[str, int] | None = None
-        for perm in permutations(range(n)):
-            mapping = {instances[i]: perm[i] for i in range(n)}
-            parts: list[str] = []
-            for inst in instances:
-                parts.append(f"N{mapping[inst]}:{self.node_types[inst]}")
-            for src, src_pin, dst, dst_pin, _ in self.internal_edges:
-                parts.append(
-                    f"E{mapping[src]}:{src_pin}:{mapping[dst]}:{dst_pin}"
-                )
-            parts.sort()
-            candidate = "|".join(parts)
-            if best is None or candidate < best:
-                best = candidate
-                best_mapping = mapping
-        assert best_mapping is not None
-        return best_mapping
+        Consistent with :attr:`canonical_key`: occurrences that share a key
+        also share this ordering (up to pattern automorphisms, which by
+        definition produce an identical cell).
+        """
+        _, mapping = canonicalize_named(
+            self.node_types,
+            list(self.internal_edges),
+            list(self.boundary_inputs),
+            list(self.boundary_outputs),
+        )
+        return mapping
 
 
-@dataclass
-class PatternOccurrence:
-    """A concrete occurrence of a pattern in a circuit."""
-
-    pattern_key: str
-    instances: frozenset[str]
-    boundary_inputs: list[tuple[str, str, str]]  # (net_name, dst_inst, dst_pin)
-    boundary_outputs: list[tuple[str, str, str]]  # (net_name, src_inst, src_pin)
-
-
-def _canonical_key(
-    node_types: dict[str, str],
-    internal_edges: list[tuple[str, str, str, str, str]],
-) -> str:
-    """Return a deterministic canonical string for the abstract pattern."""
-    instances = sorted(node_types.keys())
-    n = len(instances)
-    if n == 0:
-        return ""
-
-    best: str | None = None
-    for perm in permutations(range(n)):
-        mapping = {instances[i]: perm[i] for i in range(n)}
-        parts: list[str] = []
-        for inst in instances:
-            parts.append(f"N{mapping[inst]}:{node_types[inst]}")
-        for src, src_pin, dst, dst_pin, net_name in internal_edges:
-            parts.append(
-                f"E{mapping[src]}:{src_pin}:{mapping[dst]}:{dst_pin}"
-            )
-        parts.sort()
-        candidate = "|".join(parts)
-        if best is None or candidate < best:
-            best = candidate
-    assert best is not None
-    return best
+def _dedup(entries: Iterable[BoundaryEntry]) -> list[BoundaryEntry]:
+    """Order-preserving de-duplication of boundary entries."""
+    seen: set[BoundaryEntry] = set()
+    result: list[BoundaryEntry] = []
+    for entry in entries:
+        if entry not in seen:
+            seen.add(entry)
+            result.append(entry)
+    return result
 
 
-def build_pattern(
-    circuit: "Circuit",
-    instances: set[str],
-    collapse: Callable[[str], str],
-    pin_edges: list[tuple[str, str, str, str, str]],
-) -> Pattern:
-    """Build a Pattern from a set of instance names in a circuit."""
-    inst_set = frozenset(instances)
-    node_types = {name: collapse(circuit.instances[name].cell_type) for name in inst_set}
+def split_edges(
+    inst_set: frozenset[str],
+    pin_edges: Iterable[PinEdge],
+) -> tuple[list[PinEdge], list[BoundaryEntry], list[BoundaryEntry]]:
+    """Split incident pin edges into internal edges and boundary entries.
 
-    internal_edges: list[tuple[str, str, str, str, str]] = []
-    boundary_inputs: list[tuple[str, str, str]] = []
-    boundary_outputs: list[tuple[str, str, str]] = []
+    ``pin_edges`` only needs to contain the edges incident to ``inst_set`` (see
+    :meth:`~aion_opt.graph.builder.SignalFlowGraph.edges_for_instances`); edges
+    that touch neither end are ignored anyway.
+    """
+    internal: list[PinEdge] = []
+    boundary_in: list[BoundaryEntry] = []
+    boundary_out: list[BoundaryEntry] = []
 
     for src, src_pin, dst, dst_pin, net_name in pin_edges:
         src_in = src in inst_set
         dst_in = dst in inst_set
         if src_in and dst_in:
-            internal_edges.append((src, src_pin, dst, dst_pin, net_name))
-        elif src_in and not dst_in:
-            boundary_outputs.append((net_name, src, src_pin))
-        elif not src_in and dst_in:
-            boundary_inputs.append((net_name, dst, dst_pin))
+            internal.append((src, src_pin, dst, dst_pin, net_name))
+        elif src_in:
+            boundary_out.append((net_name, src, src_pin))
+        elif dst_in:
+            boundary_in.append((net_name, dst, dst_pin))
 
-    # Deduplicate boundary entries: a net may fan out to multiple pins inside
-    # the pattern, but it corresponds to a single boundary port.
-    seen_bi: set[tuple[str, str, str]] = set()
-    dedup_bi: list[tuple[str, str, str]] = []
-    for x in boundary_inputs:
-        if x not in seen_bi:
-            seen_bi.add(x)
-            dedup_bi.append(x)
-    seen_bo: set[tuple[str, str, str]] = set()
-    dedup_bo: list[tuple[str, str, str]] = []
-    for x in boundary_outputs:
-        if x not in seen_bo:
-            seen_bo.add(x)
-            dedup_bo.append(x)
+    # A net may fan out to several pins inside the pattern but still
+    # corresponds to a single boundary port per (net, instance, pin).
+    return internal, _dedup(boundary_in), _dedup(boundary_out)
 
-    key = _canonical_key(node_types, internal_edges)
+
+def build_pattern(
+    circuit: "Circuit",
+    instances: set[str] | frozenset[str],
+    collapse: Callable[[str], str],
+    pin_edges: Iterable[PinEdge],
+) -> Pattern:
+    """Build a :class:`Pattern` from a set of instance names in a circuit."""
+    inst_set = frozenset(instances)
+    node_types = {name: collapse(circuit.instances[name].cell_type) for name in inst_set}
+
+    internal, boundary_in, boundary_out = split_edges(inst_set, pin_edges)
+    key, _ = canonicalize_named(node_types, internal, boundary_in, boundary_out)
 
     return Pattern(
         instances=inst_set,
         node_types=node_types,
-        internal_edges=tuple(internal_edges),
-        boundary_inputs=tuple(dedup_bi),
-        boundary_outputs=tuple(dedup_bo),
+        internal_edges=tuple(internal),
+        boundary_inputs=tuple(boundary_in),
+        boundary_outputs=tuple(boundary_out),
         canonical_key=key,
     )
-

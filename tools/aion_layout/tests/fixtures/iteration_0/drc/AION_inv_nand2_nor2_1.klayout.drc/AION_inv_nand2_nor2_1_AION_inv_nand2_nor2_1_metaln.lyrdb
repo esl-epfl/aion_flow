@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <description>Main DRC Run Report at</description>
+ <original-file/>
+ <generator>drc: script='/foss/pdks/ihp-sg13g2/libs.tech/klayout/tech/drc/ihp-sg13g2.drc'</generator>
+ <top-cell>AION_inv_nand2_nor2_1</top-cell>
+ <tags>
+ </tags>
+ <categories>
+  <category>
+   <name>M2.a</name>
+   <description>5.17. M2.a: Min. Metal2 width: 0.2 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.b</name>
+   <description>5.17. M2.b: Min. Metal2 (drawing + filler) space or notch: 0.21 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.e</name>
+   <description>5.17. M2.e Min. space of Metal2 lines if, at least one line is wider than 0.195 µm and the parallel run is more than 1.0 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.f</name>
+   <description>5.17. M2.f Min. space of Metal2 lines if, at least one line is wider than 5.0 µm and the parallel run is more than 10.0 µm is 0.6 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.g</name>
+   <description>5.17. M2.g Min. 45-degree bent Metal2 width if the bent metal length is &gt; 0.5 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.i</name>
+   <description>5.17. M2.i Min. space of Metal2 lines of which at least one is bent by 45-degree is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.a</name>
+   <description>5.17. M3.a: Min. Metal3 width: 0.2 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.b</name>
+   <description>5.17. M3.b: Min. Metal3 (drawing + filler) space or notch: 0.21 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.e</name>
+   <description>5.17. M3.e Min. space of Metal3 lines if, at least one line is wider than 0.195 µm and the parallel run is more than 1.0 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.f</name>
+   <description>5.17. M3.f Min. space of Metal3 lines if, at least one line is wider than 5.0 µm and the parallel run is more than 10.0 µm is 0.6 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.g</name>
+   <description>5.17. M3.g Min. 45-degree bent Metal3 width if the bent metal length is &gt; 0.5 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.i</name>
+   <description>5.17. M3.i Min. space of Metal3 lines of which at least one is bent by 45-degree is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.a</name>
+   <description>5.17. M4.a: Min. Metal4 width: 0.2 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.b</name>
+   <description>5.17. M4.b: Min. Metal4 (drawing + filler) space or notch: 0.21 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.e</name>
+   <description>5.17. M4.e Min. space of Metal4 lines if, at least one line is wider than 0.195 µm and the parallel run is more than 1.0 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.f</name>
+   <description>5.17. M4.f Min. space of Metal4 lines if, at least one line is wider than 5.0 µm and the parallel run is more than 10.0 µm is 0.6 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.g</name>
+   <description>5.17. M4.g Min. 45-degree bent Metal4 width if the bent metal length is &gt; 0.5 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M4.i</name>
+   <description>5.17. M4.i Min. space of Metal4 lines of which at least one is bent by 45-degree is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.a</name>
+   <description>5.17. M5.a: Min. Metal5 width: 0.2 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.b</name>
+   <description>5.17. M5.b: Min. Metal5 (drawing + filler) space or notch: 0.21 μm.</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.e</name>
+   <description>5.17. M5.e Min. space of Metal5 lines if, at least one line is wider than 0.195 µm and the parallel run is more than 1.0 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.f</name>
+   <description>5.17. M5.f Min. space of Metal5 lines if, at least one line is wider than 5.0 µm and the parallel run is more than 10.0 µm is 0.6 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.g</name>
+   <description>5.17. M5.g Min. 45-degree bent Metal5 width if the bent metal length is &gt; 0.5 µm is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M5.i</name>
+   <description>5.17. M5.i Min. space of Metal5 lines of which at least one is bent by 45-degree is 0.24 um</description>
+   <categories>
+   </categories>
+  </category>
+ </categories>
+ <cells>
+  <cell>
+   <name>AION_inv_nand2_nor2_1</name>
+   <variant/>
+   <layout-name/>
+   <references>
+   </references>
+  </cell>
+ </cells>
+ <items>
+ </items>
+</report-database>

@@ -1,4 +1,18 @@
-"""JSON/Markdown report generation."""
+"""JSON / Markdown / HTML report generation.
+
+Every report is built from the same intermediate structure so the three
+renderers stay in sync:
+
+``summary``
+    Design-level totals (cells, nets, area) for the whole run.
+``patterns``
+    One entry per applied pattern, carrying its module name, how often it was
+    selected, its area figures and whether it made the *elite* cut.
+
+Area numbers are estimates.  An AION cell is assumed to occupy ``area_factor``
+times the summed area of the standard cells it replaces; the real number is
+only known after the cell has been minimised and characterised.
+"""
 
 from __future__ import annotations
 
@@ -8,74 +22,144 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from aion_opt.pattern.cover import pattern_area
+
 if TYPE_CHECKING:
     from aion_opt.io.cell_lib import CellLib
+    from aion_opt.pattern.cover import CoverResult
+    from aion_opt.pattern.miner import MiningResult
     from aion_opt.pattern.subgraph import Pattern
 
 
-def _pattern_area(pattern: "Pattern", cell_lib: "CellLib") -> float:
-    return sum(cell_lib.area(ct) for ct in pattern.node_types.values())
-
-
-def _pattern_summary(
+def _pattern_entry(
     key: str,
-    occurrences: list["Pattern"],
+    pattern: "Pattern",
+    count: int,
     cell_lib: "CellLib",
     area_factor: float,
-    module_index: dict[str, int] | None = None,
-    occurrence_count: int | None = None,
+    module_name: str | None = None,
+    elite: bool = False,
 ) -> dict[str, Any]:
-    rep = occurrences[0]
-    area = _pattern_area(rep, cell_lib)
+    """Build the per-pattern record shared by all three report renderers."""
+    area = pattern_area(pattern.node_types, cell_lib)
     new_area = area * area_factor
-    saved_per_occ = area - new_area
-    count = len(occurrences) if occurrence_count is None else occurrence_count
     return {
         "pattern_key": key,
-        "module_name": (
-            f"AION_{'_'.join(sorted(set(rep.node_types.values()))).replace('sg13g2_', '')}_{module_index[key]}"
-            if module_index and key in module_index
-            else None
-        ),
-        "size": rep.size(),
+        "module_name": module_name,
+        "size": pattern.size(),
         "occurrences": count,
-        "node_types": rep.node_types,
+        "node_types": dict(sorted(pattern.node_types.items())),
+        "inputs": len(pattern.boundary_inputs),
+        "outputs": len(pattern.boundary_outputs),
+        "elite": elite,
         "total_original_area": area * count,
         "total_new_area": new_area * count,
-        "total_saved_area": saved_per_occ * count,
-        "example_boundary_inputs": list(rep.boundary_inputs),
-        "example_boundary_outputs": list(rep.boundary_outputs),
+        "total_saved_area": (area - new_area) * count,
+        "example_boundary_inputs": list(pattern.boundary_inputs),
+        "example_boundary_outputs": list(pattern.boundary_outputs),
     }
+
+
+def rank_patterns(
+    cover: "CoverResult",
+    keys: list[str] | None = None,
+) -> list[str]:
+    """Rank pattern keys by total estimated area saved, best first.
+
+    This is the ordering behind the *elite* cell selection: the patterns at the
+    top of the list are the ones whose characterisation and minimisation buy
+    the most area back.
+    """
+    candidates = list(cover.counts) if keys is None else list(keys)
+    return sorted(candidates, key=lambda k: (-cover.total_saved_area(k), k))
+
+
+def select_elite_keys(
+    cover: "CoverResult",
+    count: int | None,
+    metric: str = "saved-area",
+) -> list[str]:
+    """Return the ``count`` best pattern keys under ``metric``.
+
+    ``count`` of ``None`` or ``0`` means "no limit" and returns every selected
+    pattern, ranked.  Supported metrics:
+
+    ``saved-area``
+        Total area saved across all selected occurrences (default).
+    ``occurrences``
+        How often the pattern is instantiated.
+    ``saved-area-per-cell``
+        Area saved per generated cell, i.e. return on the characterisation and
+        minimisation effort that each new cell costs.
+    """
+    if metric == "saved-area":
+        ranked = rank_patterns(cover)
+    elif metric == "occurrences":
+        ranked = sorted(cover.counts, key=lambda k: (-cover.counts[k], k))
+    elif metric == "saved-area-per-cell":
+        ranked = sorted(
+            cover.counts,
+            key=lambda k: (-cover.saved_area_per_occurrence.get(k, 0.0), k),
+        )
+    else:
+        raise ValueError(
+            "elite metric must be one of: saved-area, occurrences, "
+            f"saved-area-per-cell (got {metric!r})"
+        )
+    if not count:
+        return ranked
+    return ranked[:count]
 
 
 def write_pattern_report(
     output_path: Path,
-    patterns: dict[str, list["Pattern"]],
-    selected: list["Pattern"],
-    module_index: dict[str, int],
+    mining: "MiningResult",
+    cover: "CoverResult",
+    module_names: dict[str, str],
     cell_lib: "CellLib",
     area_factor: float = 0.85,
+    elite_keys: list[str] | None = None,
+    parameters: dict[str, Any] | None = None,
 ) -> None:
-    """Write a JSON report for the pattern-mining step."""
+    """Write the JSON report for the pattern-mining / cell-generation step."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    selected_keys = {occ.canonical_key for occ in selected}
+    elite = set(elite_keys or ())
 
     data = {
+        "parameters": parameters or {},
         "summary": {
-            "pattern_types_found": len(patterns),
-            "total_occurrences_found": sum(len(v) for v in patterns.values()),
-            "pattern_types_selected": len(selected_keys),
-            "total_occurrences_selected": len(selected),
+            "pattern_types_found": len(mining.occurrences),
+            "total_occurrences_found": mining.total_occurrences(),
+            "subgraphs_enumerated": mining.subgraphs_enumerated,
+            "pattern_types_selected": len(cover.counts),
+            "total_occurrences_selected": len(cover.selected),
+            "pattern_types_dropped": len(cover.dropped_keys),
+            "cover_iterations": cover.iterations,
+            "elite_cells": len(elite),
+            "estimated_total_saved_area": cover.total_saved_area_all(),
             "area_factor": area_factor,
         },
         "patterns_found": [
-            _pattern_summary(key, occs, cell_lib, area_factor, None)
-            for key, occs in patterns.items()
+            _pattern_entry(
+                key,
+                mining.representative(key),
+                len(occs),
+                cell_lib,
+                area_factor,
+            )
+            for key, occs in sorted(mining.occurrences.items())
         ],
         "patterns_selected": [
-            _pattern_summary(key, patterns[key], cell_lib, area_factor, module_index)
-            for key in selected_keys
+            _pattern_entry(
+                key,
+                mining.representative(key),
+                cover.counts[key],
+                cell_lib,
+                area_factor,
+                module_names.get(key),
+                key in elite,
+            )
+            for key in rank_patterns(cover)
         ],
     }
 
@@ -85,8 +169,8 @@ def write_pattern_report(
 
 def write_rewrite_report(
     output_prefix: Path,
-    patterns: dict[str, list["Pattern"]],
-    selected: list["Pattern"],
+    mining: "MiningResult",
+    cover: "CoverResult",
     module_names: dict[str, str],
     cell_lib: "CellLib",
     original_instances: int,
@@ -95,72 +179,72 @@ def write_rewrite_report(
     rewritten_nets: int,
     area_factor: float = 0.85,
     original_total_area: float | None = None,
-    estimated_total_new_area: float | None = None,
+    elite_keys: list[str] | None = None,
+    parameters: dict[str, Any] | None = None,
 ) -> None:
-    """Write JSON, Markdown, and HTML reports for the rewrite step."""
+    """Write JSON, Markdown and HTML reports for the rewrite step."""
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    elite = set(elite_keys or ())
 
-    selected_counts: dict[str, int] = {}
-    for occ in selected:
-        selected_counts[occ.canonical_key] = selected_counts.get(
-            occ.canonical_key, 0
-        ) + 1
+    patterns = [
+        _pattern_entry(
+            key,
+            mining.representative(key),
+            cover.counts[key],
+            cell_lib,
+            area_factor,
+            module_names.get(key, key),
+            key in elite,
+        )
+        for key in rank_patterns(cover, list(cover.counts))
+        if key in module_names
+    ]
 
-    replaced_original_area = sum(
-        _pattern_area(occ, cell_lib) for occ in selected
-    )
-    replaced_new_area = replaced_original_area * area_factor
+    replaced_original_area = sum(p["total_original_area"] for p in patterns)
+    replaced_new_area = sum(p["total_new_area"] for p in patterns)
     saved_area = replaced_original_area - replaced_new_area
-    wires_eliminated = max(0, original_nets - rewritten_nets)
+    occurrences_applied = sum(p["occurrences"] for p in patterns)
 
-    # Whole-design area totals: if only the original total is supplied,
-    # derive the new total by subtracting the replaced-area savings.
     if original_total_area is None:
         original_total_area = replaced_original_area
-    if estimated_total_new_area is None:
-        estimated_total_new_area = original_total_area - saved_area
+    estimated_total_new_area = original_total_area - saved_area
 
     data = {
+        "parameters": parameters or {},
         "summary": {
             "original_cells": original_instances,
             "rewritten_cells": rewritten_instances,
             "cell_reduction": original_instances - rewritten_instances,
             "original_nets": original_nets,
             "rewritten_nets": rewritten_nets,
-            "wires_eliminated": wires_eliminated,
-            "patterns_applied": len(selected_counts),
-            "occurrences_applied": len(selected),
+            "wires_eliminated": max(0, original_nets - rewritten_nets),
+            "patterns_applied": len(patterns),
+            "occurrences_applied": occurrences_applied,
+            # Only meaningful when the caller ranked the cells; `rewrite` is
+            # given a library and does not re-rank it.
+            **({"elite_cells": len(elite)} if elite_keys is not None else {}),
             "original_replaced_area": replaced_original_area,
             "estimated_new_area": replaced_new_area,
             "estimated_area_savings": saved_area,
             "estimated_area_savings_percent": (
-                (saved_area / replaced_original_area * 100) if replaced_original_area else 0.0
+                (saved_area / replaced_original_area * 100)
+                if replaced_original_area
+                else 0.0
             ),
             "original_total_area": original_total_area,
             "estimated_total_new_area": estimated_total_new_area,
-            "estimated_total_area_savings": original_total_area - estimated_total_new_area,
+            "estimated_total_area_savings": original_total_area
+            - estimated_total_new_area,
             "area_factor": area_factor,
         },
-        "patterns": [
-            {
-                **_pattern_summary(
-                    key, patterns[key], cell_lib, area_factor, None, occurrence_count=count
-                ),
-                "module_name": module_names[key],
-            }
-            for key, count in selected_counts.items()
-        ],
+        "patterns": patterns,
     }
 
-    json_path = output_prefix.with_suffix(".json")
-    with open(json_path, "w", encoding="utf-8") as fh:
+    with open(output_prefix.with_suffix(".json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
 
-    md_path = output_prefix.with_suffix(".md")
-    _write_markdown(md_path, data)
-
-    html_path = output_prefix.with_suffix(".html")
-    _write_html(html_path, data)
+    _write_markdown(output_prefix.with_suffix(".md"), data)
+    _write_html(output_prefix.with_suffix(".html"), data)
 
 
 def _write_markdown(path: Path, data: dict[str, Any]) -> None:
@@ -170,8 +254,8 @@ def _write_markdown(path: Path, data: dict[str, Any]) -> None:
         "",
         "## Summary",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Original cells | {s['original_cells']} |",
         f"| Rewritten cells | {s['rewritten_cells']} |",
         f"| Cell reduction | {s['cell_reduction']} |",
@@ -180,6 +264,11 @@ def _write_markdown(path: Path, data: dict[str, Any]) -> None:
         f"| Wires eliminated | {s['wires_eliminated']} |",
         f"| Patterns applied | {s['patterns_applied']} |",
         f"| Occurrences applied | {s['occurrences_applied']} |",
+        *(
+            [f"| Elite cells | {s['elite_cells']} |"]
+            if "elite_cells" in s
+            else []
+        ),
         f"| Original replaced area | {s['original_replaced_area']:.4f} |",
         f"| Estimated new area | {s['estimated_new_area']:.4f} |",
         f"| Estimated area savings | {s['estimated_area_savings']:.4f} ({s['estimated_area_savings_percent']:.2f}%) |",
@@ -190,16 +279,18 @@ def _write_markdown(path: Path, data: dict[str, Any]) -> None:
         "",
         "## Applied Patterns",
         "",
-        "| Module | Size | Occurrences | Original area | New area | Savings |",
-        "|--------|------|-------------|---------------|----------|---------|",
+        "Patterns are ordered by estimated area saved. Rows marked * are part "
+        "of the elite cell library.",
+        "",
+        "| Elite | Module | Size | Occurrences | Inputs | Outputs | Original area | New area | Savings |",
+        "|-------|--------|------|-------------|--------|---------|---------------|----------|---------|",
     ]
     for p in data["patterns"]:
-        orig = p["total_original_area"]
-        new = p["total_new_area"]
-        saved = p["total_saved_area"]
         lines.append(
-            f"| {p['module_name']} | {p['size']} | {p['occurrences']} | "
-            f"{orig:.4f} | {new:.4f} | {saved:.4f} |"
+            f"| {'*' if p.get('elite') else ''} | {p['module_name']} | {p['size']} | "
+            f"{p['occurrences']} | {p.get('inputs', 0)} | {p.get('outputs', 0)} | "
+            f"{p['total_original_area']:.4f} | {p['total_new_area']:.4f} | "
+            f"{p['total_saved_area']:.4f} |"
         )
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -234,6 +325,7 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
     )
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    show_elite = "elite_cells" in s
 
     ICON_GRID = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>'''
     ICON_BOLT = '''<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>'''
@@ -290,16 +382,28 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
             return f'<span class="medal" title="#{rank + 1} top pattern" style="color:{color}">{ICON_STAR}</span>'
         return f'<span class="rank">#{rank + 1}</span>'
 
+    elite_card = (
+        card(
+            ICON_STAR,
+            "Elite Cells",
+            f"{s['elite_cells']}",
+            f"of {s['patterns_applied']} generated cells",
+        )
+        if show_elite
+        else ""
+    )
+
     pattern_rows = []
     for rank, p in enumerate(patterns):
         share = (p["total_saved_area"] / total_savings * 100) if total_savings else 0.0
-        inputs = len(p.get("example_boundary_inputs", []))
-        outputs = len(p.get("example_boundary_outputs", []))
+        inputs = p.get("inputs", len(p.get("example_boundary_inputs", [])))
+        outputs = p.get("outputs", len(p.get("example_boundary_outputs", [])))
+        badge = '<span class="elite-badge" title="part of the elite cell library">ELITE</span>' if p.get("elite") else ""
         pattern_rows.append(
             f"""
             <tr>
               <td class="rank-cell">{medal(rank)}</td>
-              <td class="mono">{html_module.escape(str(p['module_name']))}</td>
+              <td class="mono">{html_module.escape(str(p['module_name']))}{badge}</td>
               <td>{p['size']}</td>
               <td>{p['occurrences']}</td>
               <td>{inputs}</td>
@@ -458,6 +562,7 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
     .mini-bar {{ background: var(--panel-2); border-radius: 999px; height: 7px; width: 90px; overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 0.5rem; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }}
     .mini-bar-fill {{ height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width 1s ease; }}
     .share {{ color: var(--muted); font-size: 0.8rem; font-weight: 600; min-width: 42px; display: inline-block; }}
+    .elite-badge {{ margin-left: 0.5rem; padding: 0.1rem 0.45rem; border-radius: 999px; background: rgba(251,191,36,0.16); color: var(--warning); font-size: 0.65rem; font-weight: 800; letter-spacing: 0.08em; vertical-align: middle; }}
     footer {{ text-align: center; color: var(--muted); padding: 2.5rem 1rem; font-size: 0.85rem; }}
     footer time {{ color: var(--text); font-weight: 600; }}
     .muted-note {{ color: var(--muted); font-size: 0.85rem; margin-top: -0.75rem; margin-bottom: 1.25rem; }}
@@ -489,6 +594,7 @@ def _write_html(path: Path, data: dict[str, Any]) -> None:
       {card(ICON_BOLT, "Wires Eliminated", f"{s['wires_eliminated']}", f"{net_reduction_pct:.1f}% fewer nets")}
       {card(ICON_CUBE, "Patterns Applied", f"{s['patterns_applied']}", f"{s['occurrences_applied']} occurrences")}
       {card(ICON_MINIMIZE, "Area Savings", f"{s['estimated_area_savings']:.2f}", f"{area_savings_pct:.1f}% of replaced area")}
+      {elite_card}
     </section>
 
     <section class="grid-2">

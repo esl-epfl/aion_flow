@@ -35,6 +35,7 @@ make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml BUILD_DIR=build/pm3
 | `make aion-opt-graph2verilog` | Convert netlist to structural Verilog |
 | `make aion-opt-generate-cells` | Mine patterns and emit AION cells |
 | `make aion-opt-rewrite` | Rewrite netlist using generated cells |
+| `make aion-opt-complement-plan` | Decide which complemented cell inputs come from outside the cell |
 | `make aion-opt-lec` | Logical equivalence check |
 | `make aion-opt-sec` | Sequential equivalence check |
 | `make aion-opt-clean` | Remove aion_opt build outputs |
@@ -47,6 +48,7 @@ make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml BUILD_DIR=build/pm3
 | `make aion-char-clean` | Remove aion_char build outputs |
 | `make aion-minimizer-run` | Minimize a gate-level SPICE netlist |
 | `make aion-minimizer-verify-spice CELL=...` | Minimize and verify with aion_char SPICE |
+| `make aion-minimizer-test` | Run the aion_minimizer test suite |
 | `make aion-minimizer-clean` | Remove aion_minimizer build outputs |
 | `make clean` | Remove all build outputs |
 
@@ -68,6 +70,14 @@ See [`tools/aion_char/README.md`](tools/aion_char/README.md) for commands and co
 
 ### Gate-level SPICE minimization — `aion_minimizer`
 
-The `aion_minimizer` tool (under `tools/aion_minimizer/`) takes a small gate-level SPICE netlist and merges the gate instances into a single optimized transistor-level SPICE netlist. It can also feed the result into `aion_char` for SPICE verification.
+The `aion_minimizer` tool (under `tools/aion_minimizer/`) takes a small gate-level SPICE netlist and re-implements it as one transistor-level SPICE cell. It reads the Boolean function out of the PDK transistors, partitions the gate DAG into the cheapest set of complementary CMOS stages, sizes the devices, and can prove the result equivalent by exhaustive switch-level simulation.
+
+Partitioning rather than always merging everything into one gate is what keeps XOR-heavy cells sane: a part that resynthesis cannot beat keeps its PDK cells, so **the result is never worse than the netlist it was given**.
 
 See [`tools/aion_minimizer/README.md`](tools/aion_minimizer/README.md) for commands and configuration flags.
+
+### Inverted inputs — across `aion_opt` and `aion_minimizer`
+
+When a merged cell needs a complemented copy of one of its inputs, the inverter can live inside the cell or arrive on a `<port>_bar` port that the parent netlist drives. `aion_opt complement-plan` decides that per cell and per input by costing both options against the netlist the cells will actually be instantiated in.
+
+See [Inverted inputs](tools/aion_opt/README.md#inverted-inputs) for the loop and the numbers.

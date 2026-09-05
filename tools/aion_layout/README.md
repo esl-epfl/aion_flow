@@ -77,10 +77,12 @@ for an agent to decide there and nothing that can loop.
 
 ## The evidence packet
 
-This is the centre of the design. Each iteration the host computes roughly
-13 KB of exact ground truth and inlines a bounded, labelled subset of it into
-the prompt — currently about **14 KB of evidence inside a ~20.6 KB / ~5.2k-token
-prompt**.
+This is the centre of the design. Each iteration the host computes ~31 KB of
+exact ground truth from the raw artifacts and inlines the part the current
+curriculum rung declares — **7–20 KB of evidence in a 12–27 KB prompt**,
+depending on the rung. `AION_GATE=off` restores the whole packet (~24 KB).
+
+Which blocks each rung carries is tabulated in **[FLOW.md](FLOW.md)**.
 
 | Block | Contents |
 |---|---|
@@ -93,6 +95,9 @@ prompt**.
 | `[7]` | **Layout digest** — per-layer shape inventory, every label and port, a cross-net overlap table, and a poly/active crossing table |
 | `[8]` | **Build error** — the previous attempt's traceback, when there was one |
 | `[9]` | **Design rules** — every numeric rule, generated from `sg13g2_tech`: widths, spacings, enclosures, cut sizes, the routing grid, the standard-cell frame |
+| `[10]` | **API reference** — the callable surface, by introspection, narrowed to the calls this rung needs |
+| `[11]` | **Reference cell** — a *different*, structurally similar PDK cell, as an API example. The only block that is not evidence about this run, and the first given up when the packet is over budget |
+| `[0]` | **Objective** — the one rung this turn is graded on, derived from the netlist and the measured score. See [FLOW.md](FLOW.md) |
 
 Block `[7]` replaces a rendered PNG. The model is text-only, so a picture was a
 dead channel; a shape inventory with a cross-net overlap table is not. It is
@@ -113,9 +118,11 @@ the enclosure keys without their values, so every coordinate would have been a
 guess.
 
 Block `[9]` removed the reason to browse. `orchestrate.sh` also removes the
-opportunity: `context/` is `chmod 000` for the duration of the model call and
-restored by `aion_cleanup`, which runs on a normal exit and on `INT`/`TERM`/`HUP`
-alike. Nothing in the flow reads `context/`, so the pipeline cannot notice.
+opportunity: `context/` is **moved aside** for the duration of the model call and restored by
+`aion_cleanup`, which runs on a normal exit and on `INT`/`TERM`/`HUP` alike.
+`chmod 000` was the first attempt and backfired: ripgrep, which the agent's file
+search shells out to, *aborts* on an unreadable directory rather than skipping
+it, so the model could not find `aion_layout/` at all. Nothing in the flow reads `context/`, so the pipeline cannot notice.
 
 Build it standalone:
 
@@ -195,7 +202,7 @@ other candidate is indented out of column 0.
 ## Verifying it yourself
 
 ```bash
-make test          # 188 tests, no Docker, no model, ~4 s
+make test          # 339 tests, no Docker, no model, ~8 s
 ```
 
 The suite runs against committed fixtures in `tests/fixtures/`, captured from a
@@ -230,7 +237,9 @@ Netgen `failed_pin_matching`, `sg13_lv_nmos` and `sg13_lv_pmos` both
 |---|---|---|
 | `MODEL` | `moonshotai/Kimi-K2.7-Code` | Inference model id; see `copilot-rcp.sh --list` |
 | `CEFPROVIDER_API_KEY` | — | Gateway key. Required for a real run |
-| `FIX_TIMEOUT` | `10m` | Wall-clock budget for one model call |
+| `FIX_TIMEOUT` | `12m` | Wall-clock budget for one model call |
+| `MODEL_EFFORT` | `low` | Reasoning effort passed to the CLI. Measured to be a **no-op for Kimi** on this gateway; kept because it matters for the other models. See [SUMMARY.md](SUMMARY.md) |
+| `AION_GATE` | `auto` | Curriculum rung: `auto` derives it from the score, a rung key forces one, `off` restores the whole-cell objective |
 | `MAX_MODEL_CALLS` | `MAX_ITERATIONS` | Global model-call budget, build-gate retries included |
 | `MAX_BUILD_FAILURES` | `3` | Build-gate retries inside one iteration, each spending from the global budget |
 | `HOST_BUILD_TIMEOUT` | `300` | Seconds the host may spend running model-written code |
@@ -239,9 +248,10 @@ Netgen `failed_pin_matching`, `sg13_lv_nmos` and `sg13_lv_pmos` both
 | `AION_DUMP_PROMPT` | — | Assemble the prompt, write it to this path, exit |
 | `COPILOT_RCP` | `../../copilot-rcp.sh` | Path to the gateway wrapper |
 
-The default is **Kimi** (`orchestrate.sh:69`), configured at a 262k window in
-`copilot-rcp.sh`. `Qwen/Qwen3.5-397B-A17B` is the other tested option, at 128k.
-The prompt is ~5.2k tokens either way, so both fit comfortably.
+The default is **Kimi**, configured at a 262k window in `copilot-rcp.sh`.
+`Qwen/Qwen3.5-397B-A17B` is the other tested option, at 128k. A rung's prompt is
+3–7k tokens, so both fit comfortably — prompt size has never been the binding
+constraint. See [SUMMARY.md](SUMMARY.md) for what was.
 
 ### Make targets
 
@@ -268,7 +278,9 @@ The prompt exposes exactly one verification command:
 
 It sources `pipeline.sh` and runs the identical build → DRC → LVS → report
 chain the host uses to grade the result, printing the same verdict block. The
-model may use it up to five times inside its 10-minute budget.
+model may use it up to twice inside its budget: each round runs the real tools
+and takes minutes, and a single rung is narrow enough that a second opinion on
+it is rarely worth a whole round.
 
 The work directory must sit outside the graded iteration tree — the guard
 resolves symlinks and refuses paths that land inside it, because the host
@@ -302,7 +314,7 @@ aion_layout/
 │   ├── auto_scaffold.py        # Starter cell from a netlist — deliberately incomplete
 │   ├── router.py, doc_generator.py, gds_to_python.py
 ├── cells/                      # Hand-written generators: template.py, sg13g2_nand2_1.py
-├── tests/                      # 188 tests + committed fixtures from a real failing run
+├── tests/                      # 339 tests + committed fixtures from a real failing run
 └── build/                      # Run output (gitignored)
 ```
 
@@ -386,39 +398,42 @@ gitignored and safe to delete.
 
 ## Current status
 
-The harness is complete and verified (203 tests). The loop does **not** yet
-converge, and the cause is measured: a whole-cell objective is not answerable
-in one model turn. Kimi-K2.7-Code writes working code in 10s for a narrow
-objective and never emits content for the full cell (64,167 characters of
-reasoning at a 16k budget, zero output); Qwen3.5-397B fails identically on the
-same prompt. Raising `FIX_TIMEOUT` does not help — more budget buys more
-reasoning, not output.
+The harness is complete and verified (**368 tests**). Stage 5 — the curriculum —
+is built: the loop asks for one rung of a netlist-derived ladder per turn, scores
+every iteration, keeps the best, and branches from it on a regression.
 
-The fix is task decomposition. See **[NEW_PLAN.md](NEW_PLAN.md)** for the
-Stage 5 curriculum design, what to read to pick the work up, and the
-measurements behind it.
+**It now climbs, and then it stalls, and both halves are measured.**
 
-Note also that `opencode` is currently broken on this machine (hangs at
-`init` before opening a connection); `AGENT_CLI=copilot` is the default.
+A real 10-iteration run:
 
-## Reference documentation
+```
+iter  rung      score   outcome
+0     gates     6270    accepted
+1     taps      4910    accepted                     (-1360)
+2     gates     5990    REJECTED, branching from 1   (+1080)
+3     shorts    4500    accepted                     (-1490)
+```
 
-- **[ORCHESTRATION.md](ORCHESTRATION.md)** — the harness in depth: `state.json`
-  schema, every pipeline step, the evidence packet, the model call, the build
-  gate, finalisation, failure modes, standing invariants.
-- **[SKILL.md](SKILL.md)** — layout *domain* guidance: debugging priority order,
-  LVS and DRC strategy, latch-up (`LU.a`/`LU.b`) and taps. Contains no
-  orchestration procedure.
-- **[GDS_PYTHON_API.md](GDS_PYTHON_API.md)** — the Python API: geometry
-  primitives, layers, shapes, cells, building blocks, `draw_tap`, routing.
-- **[CLI_REFERENCE.md](CLI_REFERENCE.md)** — Make targets, CLI scripts, the
-  Docker verification flow, common workflows.
+The score improves, the ladder advances `gates → devices → taps → shorts`, and
+iteration 2's regression was caught and rejected on its own. Before Stage 5,
+every run in `build*/` reads `model_calls: 1`, `iteration_1/` empty, `blocked`.
 
-## Notes
+It stops at the `shorts`/`pins` region, and the cause is not the prompt size, the
+reasoning setting or the token budget:
 
-- GDS output uses the KLayout Python API (`klayout.db`).
-- The tool is hardcoded to IHP SG13G2.
-- LVS consumes a SPICE netlist provided by the upstream step; the tool does not
-  generate it and must never modify it.
-- `sak-drc.sh` and `sak-lvs.sh` run inside Docker. Report parsing and evidence
-  building are pure Python plus `klayout` and run on the host.
+| rung | the edit it asks for | reasoning | outcome |
+| --- | --- | ---: | --- |
+| `gates` | "add a fourth poly stripe on net `I1_bar`" — enumerable | 13,024 ch | **45 s** |
+| `shorts` | "move shapes until no two nets touch, breaking nothing" — a search | 158,775 ch at a 40k budget | never answers |
+
+A rung is answerable when the model can *name* the edit from the evidence, and
+not when it has to *search* for one. That is the design rule a curriculum like
+this needs, and it is the thing to act on next.
+
+Read **[SUMMARY.md](SUMMARY.md)** before changing anything here — it has the full
+measurement tables, a control that disproves the obvious explanation, and the
+two fail-closed defects this work turned up.
+
+- **[FLOW.md](FLOW.md)** — the loop, and what is mechanical vs. what the model does
+- **[SUMMARY.md](SUMMARY.md)** — what was measured about Kimi and the flow, good and bad
+- **[NEW_PLAN.md](NEW_PLAN.md)** — the Stage 5 design this implements

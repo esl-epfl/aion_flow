@@ -1,0 +1,79 @@
+Netgen 1.5.323 compiled on Mon Jul 27 09:16:59 AM CEST 2026
+Warning: netgen command 'format' use fully-qualified name '::netgen::format'
+Warning: netgen command 'global' use fully-qualified name '::netgen::global'
+Reading netlist file /foss/designs/aion_flow/tools/aion_layout/std_cells_claude/lvs/AION_inv_nand2_nor2_1.magic.lvs/AION_inv_nand2_nor2_1.ext.spc for /foss/designs/aion_flow/tools/aion_layout/std_cells_claude/lvs/AION_inv_nand2_nor2_1.magic.lvs/AION_inv_nand2_nor2_1.ext.spc AION_inv_nand2_nor2_1
+Call to undefined subcircuit sg13_lv_nmos
+Creating placeholder cell definition.
+Call to undefined subcircuit sg13_lv_pmos
+Creating placeholder cell definition.
+Reading netlist file /foss/designs/aion_flow/tools/aion_layout/AION_inv_nand2_nor2_1_minimized.spice for /foss/designs/aion_flow/tools/aion_layout/AION_inv_nand2_nor2_1_minimized.spice AION_inv_nand2_nor2_1
+Call to undefined subcircuit sg13_lv_pmos
+Creating placeholder cell definition.
+Call to undefined subcircuit sg13_lv_nmos
+Creating placeholder cell definition.
+
+Reading setup file /foss/pdks/ihp-sg13g2/libs.tech/netgen/ihp-sg13g2_setup.tcl
+
+Model sg13_lv_nmos pin 1 == 3
+No property ng found for device sg13_lv_nmos
+No property trise found for device sg13_lv_nmos
+No property z1 found for device sg13_lv_nmos
+No property z2 found for device sg13_lv_nmos
+No property wmin found for device sg13_lv_nmos
+No property rfmode found for device sg13_lv_nmos
+No property pre_layout found for device sg13_lv_nmos
+Model sg13_lv_nmos pin 1 == 3
+No property as found for device sg13_lv_nmos
+No property ad found for device sg13_lv_nmos
+No property pd found for device sg13_lv_nmos
+No property ps found for device sg13_lv_nmos
+No property trise found for device sg13_lv_nmos
+No property z1 found for device sg13_lv_nmos
+No property z2 found for device sg13_lv_nmos
+No property wmin found for device sg13_lv_nmos
+No property rfmode found for device sg13_lv_nmos
+No property pre_layout found for device sg13_lv_nmos
+Model sg13_lv_pmos pin 1 == 3
+No property ng found for device sg13_lv_pmos
+No property trise found for device sg13_lv_pmos
+No property z1 found for device sg13_lv_pmos
+No property z2 found for device sg13_lv_pmos
+No property wmin found for device sg13_lv_pmos
+No property rfmode found for device sg13_lv_pmos
+No property pre_layout found for device sg13_lv_pmos
+Model sg13_lv_pmos pin 1 == 3
+No property as found for device sg13_lv_pmos
+No property ad found for device sg13_lv_pmos
+No property pd found for device sg13_lv_pmos
+No property ps found for device sg13_lv_pmos
+No property trise found for device sg13_lv_pmos
+No property z1 found for device sg13_lv_pmos
+No property z2 found for device sg13_lv_pmos
+No property wmin found for device sg13_lv_pmos
+No property rfmode found for device sg13_lv_pmos
+No property pre_layout found for device sg13_lv_pmos
+Comparison output logged to file /foss/designs/aion_flow/tools/aion_layout/std_cells_claude/lvs/AION_inv_nand2_nor2_1.magic.lvs/AION_inv_nand2_nor2_1.lvs.out
+Logging to file "/foss/designs/aion_flow/tools/aion_layout/std_cells_claude/lvs/AION_inv_nand2_nor2_1.magic.lvs/AION_inv_nand2_nor2_1.lvs.out" enabled
+Circuit sg13_lv_nmos contains no devices.
+Circuit sg13_lv_pmos contains no devices.
+
+Contents of circuit 1:  Circuit: 'AION_inv_nand2_nor2_1'
+Circuit AION_inv_nand2_nor2_1 contains 8 device instances.
+  Class: sg13_lv_pmos          instances:   4
+  Class: sg13_lv_nmos          instances:   4
+Circuit contains 9 nets.
+Contents of circuit 2:  Circuit: 'AION_inv_nand2_nor2_1'
+Circuit AION_inv_nand2_nor2_1 contains 8 device instances.
+  Class: sg13_lv_pmos          instances:   4
+  Class: sg13_lv_nmos          instances:   4
+Circuit contains 9 nets.
+
+Circuit 1 contains 8 devices, Circuit 2 contains 8 devices.
+Circuit 1 contains 9 nets,    Circuit 2 contains 9 nets.
+
+
+Final result: 
+Circuits match uniquely.
+.
+Logging to file "/foss/designs/aion_flow/tools/aion_layout/std_cells_claude/lvs/AION_inv_nand2_nor2_1.magic.lvs/AION_inv_nand2_nor2_1.lvs.out" disabled
+LVS Done.

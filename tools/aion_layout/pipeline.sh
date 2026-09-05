@@ -813,11 +813,26 @@ step_report () {
   state_write_atomic '.steps.report_generated = true'
 }
 
+pipeline_base_iteration () {
+  # The iteration the model is asked to work FROM, which is not always the
+  # newest one.  When an iteration scores worse than the best seen, the loop
+  # rejects it and branches from the best instead: advancing from a regression
+  # is an unfiltered random walk, and the better version is then lost for good.
+  # Falls back to the current iteration, so a run with no .base_iteration --
+  # every run before this key existed -- behaves exactly as it did.
+  local base
+  base="$(state_read '.base_iteration // empty' 2>/dev/null || true)"
+  case "$base" in
+    '' | null | *[!0-9]*) pipeline_iteration ;;
+    *) printf '%s\n' "$base" ;;
+  esac
+}
+
 step_evidence () {
   # $1 = optional build-error file (orchestrate.sh passes the traceback from a
   # rejected module here so the model sees why its last attempt would not build)
   local n iter_dir build_err
-  n="$(pipeline_iteration)" || return 1
+  n="$(pipeline_base_iteration)" || return 1
   iter_dir="${BUILD_DIR}/layout/iteration_${n}"
   build_err="${1:-${AION_BUILD_ERROR_FILE:-}}"
   [[ -z "$build_err" && -s "${iter_dir}/build_error.txt" ]] && build_err="${iter_dir}/build_error.txt"

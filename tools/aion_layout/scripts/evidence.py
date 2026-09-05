@@ -86,7 +86,22 @@ from aion_layout.spice_parser import (  # noqa: E402
     parse_spice_file,
 )
 
-DEFAULT_MAX_BYTES = 40_000
+#: Byte budget for the whole packet.
+#:
+#: 40_000 once, to fit block [11] -- sized to the context window, when the
+#: measured constraint turned out to be the model's reasoning budget rather than
+#: window space.  NEW_PLAN.md asked for "24_000 or lower".
+#:
+#: 26_000 is what that number becomes once the rule "never truncate a
+#: measurement" is applied to it: the packet's measurements alone are ~23.9 KB
+#: for the fixture cell, so a 24_000 budget cannot hold them *and* say that the
+#: example was dropped, and the squeeze reaches the layout digest instead.
+#:
+#: This governs only the UNSCOPED packet -- final/evidence.txt and the model's
+#: own selfcheck, where completeness is the point.  Every model call goes
+#: through a curriculum rung, whose own much smaller budget applies on top
+#: (curriculum.DEFAULT_GATE_BYTES).
+DEFAULT_MAX_BYTES = 26_000
 
 #: Wall-clock limit, in seconds, for the block 7 generator subprocess.
 LAYOUT_DIGEST_TIMEOUT_S = 60.0
@@ -99,6 +114,7 @@ VERDICT_BLOCK = 2
 
 #: Per-block byte caps.  ``None`` means "never cap this block".
 BLOCK_CAPS: Dict[int, Optional[int]] = {
+    0: None,   # OBJECTIVE       -- the instruction; capping it truncates the task
     1: 6000,   # TARGET NETLIST  -- capped structurally, see _target_netlist_body
     2: None,   # VERDICT         -- three lines
     3: 8000,   # MAGIC DRC
@@ -3021,11 +3037,19 @@ def _first_doc_line(obj: object) -> str:
     return ""
 
 
-def _api_surface() -> str:
-    """Return the public callable surface of the layout API, as text."""
+def _api_surface(focus: Sequence[str] = ()) -> str:
+    """Return the public callable surface of the layout API, as text.
+
+    ``focus`` narrows it to the names one curriculum rung actually calls.  The
+    full surface is 6.4 KB, which is most of a narrow turn's whole budget; the
+    rung that has to add a tap does not need the router's signatures to do it.
+    An empty ``focus`` keeps everything, which is what every non-curriculum
+    caller gets.
+    """
     import importlib
     import inspect
 
+    wanted = {name for name in focus}
     out: List[str] = []
     for mod_name, blurb in API_MODULES:
         try:
@@ -3038,6 +3062,11 @@ def _api_surface() -> str:
         names = list(exported) if exported else [
             n for n in sorted(vars(mod)) if not n.startswith("_")
         ]
+
+        if wanted:
+            names = [n for n in names if n in wanted]
+            if not names:
+                continue
 
         out.append("")
         out.append(f"--- {mod_name} -- {blurb} ---")
@@ -3070,11 +3099,13 @@ def _api_surface() -> str:
     return "\n".join(out).strip("\n")
 
 
-def block_api_reference() -> Block:
+def block_api_reference(focus: Sequence[str] = ()) -> Block:
     """Build block 10: the layout API's public surface, by introspection."""
     title = "API REFERENCE (introspected from the installed aion_layout package)"
+    if focus:
+        title = "API REFERENCE (the calls this turn needs, introspected)"
     try:
-        body = _api_surface()
+        body = _api_surface(focus)
     except Exception as exc:  # pragma: no cover
         return Block(10, title, f"(not available: {_scrub_line(f'{type(exc).__name__}: {exc}')})")
     head = (
@@ -3082,6 +3113,11 @@ def block_api_reference() -> Block:
         "signatures; you do not need to open the source. Your module must define\n"
         "generate(cell_name: str, tech: Tech) -> Cell.\n"
     )
+    if focus:
+        head += (
+            "Narrowed to what this turn needs. The rest of the API is unchanged and\n"
+            "still callable; ./GDS_PYTHON_API.md documents all of it.\n"
+        )
     return Block(10, title, head + body)
 
 
@@ -3125,6 +3161,15 @@ def block_reference_cell(netlist: Optional[Path], max_bytes: int = 8000) -> Opti
     return Block(11, title, body)
 
 
+#: How much of the reference cell a *scoped* packet asks for.
+#:
+#: Block [11] is an example, not evidence, and half an example is still an
+#: example.  Left at its full 8 KB it crowds a rung's own measurements: at the
+#: `devices` rung the global squeeze reached past it and started cutting the
+#: layout digest, which is one of the two things that rung is graded on.
+REFERENCE_GATE_BYTES = 4000
+
+
 def build_blocks(
     netlist: Optional[Path],
     iter_dir: Path,
@@ -3132,6 +3177,7 @@ def build_blocks(
     module_path: Optional[Path] = None,
     build_error_file: Optional[Path] = None,
     digest_timeout: float = LAYOUT_DIGEST_TIMEOUT_S,
+    reference_bytes: int = 8000,
 ) -> List[Block]:
     """Build every block, in packet order, without enforcing the global budget."""
     artifacts = discover_artifacts(iter_dir, cell_name)
@@ -3155,13 +3201,116 @@ def build_blocks(
         block_design_rules(),
         block_api_reference(),
     ]
-    reference = block_reference_cell(netlist)
+    reference = block_reference_cell(netlist, reference_bytes)
     if reference is not None:
         blocks.append(reference)
     build_error = block_build_error(build_error_file)
     if build_error is not None:
         blocks.append(build_error)
     return blocks
+
+
+# ---------------------------------------------------------------------------
+# Block 0 -- the curriculum objective
+#
+# The packet used to state everything known about the iteration and leave the
+# model to choose what to do about it.  Measured, that choice is what it cannot
+# make in one turn: 64,167 characters of reasoning at a 16k completion budget
+# and zero output, on a packet that was correct in every particular.
+#
+# Block [0] answers the question instead.  ``scripts/curriculum.py`` walks a
+# ladder derived from the netlist, finds the lowest rung the measured score does
+# not clear, and states that one rung as the turn's whole objective.  The rest
+# of the packet is then filtered down to the blocks that rung declares, because
+# evidence about a rung the model is not on is evidence it will spend the budget
+# reasoning about.
+# ---------------------------------------------------------------------------
+
+#: ``--gate`` value meaning "derive the rung from the measured score".
+GATE_AUTO = "auto"
+#: ``--gate`` value meaning "no curriculum; emit the whole packet".
+GATE_OFF = "off"
+
+
+def _load_curriculum() -> Any:
+    """Import ``scripts/curriculum.py`` by location; ``scripts/`` is no package."""
+    path = Path(__file__).resolve().parent / "curriculum.py"
+    spec = importlib.util.spec_from_file_location("aion_curriculum", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution: @dataclass resolves its own module out of
+    # sys.modules while the class body runs.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@dc.dataclass
+class GateSelection:
+    """The rung this packet is scoped to, or why it is not scoped at all."""
+
+    gate: Any = None
+    objective: Optional[Block] = None
+    keep: Optional[frozenset] = None
+    api_focus: Tuple[str, ...] = ()
+    max_bytes: Optional[int] = None
+    note: str = ""
+
+    @property
+    def active(self) -> bool:
+        return self.gate is not None
+
+
+def select_gate(
+    spec: Optional[str],
+    netlist: Optional[Path],
+    iter_dir: Path,
+    cell_name: str,
+) -> GateSelection:
+    """Resolve ``spec`` into the rung to scope this packet to.
+
+    Never raises and never fails the packet.  Anything that goes wrong -- no
+    netlist, an unparsable one, a rung name this cell's ladder does not have --
+    comes back as an inactive selection with a stated reason, and the caller
+    emits the whole packet.  A curriculum that could blank the evidence would be
+    a new way to blind the model, which is the failure the packet exists to
+    prevent.
+    """
+    spec = (spec or "").strip()
+    if not spec or spec == GATE_OFF:
+        return GateSelection()
+    if netlist is None or not netlist.is_file():
+        return GateSelection(note="no target netlist, so no ladder could be derived")
+
+    try:
+        curriculum = _load_curriculum()
+        subckts = parse_spice_file(netlist)
+        if not subckts:
+            return GateSelection(note=f"no subcircuit parsed from {_rel(netlist)}")
+        subckt = next((s for s in subckts if s.name == cell_name), subckts[0])
+        score = curriculum._scorer.score_iteration(iter_dir, cell_name, netlist)
+        if spec == GATE_AUTO:
+            gate = curriculum.current_gate(subckt, score)
+        else:
+            gate = curriculum.gate_by_key(subckt, spec)
+            if gate is None:
+                ladder = ", ".join(g.key for g in curriculum.gates(subckt))
+                return GateSelection(
+                    note=f"{subckt.name} has no rung named {spec!r}; its ladder is: {ladder}"
+                )
+        body = curriculum.objective_block(gate, subckt, score)
+        return GateSelection(
+            gate=gate,
+            objective=Block(0, curriculum.OBJECTIVE_TITLE, body),
+            keep=frozenset(gate.all_blocks),
+            api_focus=tuple(gate.api_focus),
+            max_bytes=gate.max_bytes,
+        )
+    except BaseException as exc:  # noqa: BLE001 - the packet must survive anything
+        return GateSelection(
+            note=f"curriculum unavailable: {_scrub_line(f'{type(exc).__name__}: {exc}')}"
+        )
 
 
 def _header(
@@ -3181,6 +3330,58 @@ def _header(
         f"blocks   : {index}\n"
         "===== END AION EVIDENCE PACKET HEADER =====\n\n"
     )
+
+
+#: Body of block [11] once it has been given up for the measurements.
+_REFERENCE_DROPPED = (
+    "(dropped: the packet was over budget, and this block is the only one in it\n"
+    "that is not a measurement of this run.  It is a different, already-solved\n"
+    "cell shown as an API example, so giving it up costs an illustration; giving\n"
+    "up any other block costs a number you would otherwise have to guess.\n"
+    "./GDS_PYTHON_API.md and ./SKILL.md carry the same guidance in prose.)"
+)
+
+
+def _drop_example_before_cutting_evidence(
+    blocks: List[Block],
+    cell_name: str,
+    netlist: Optional[Path],
+    iter_dir: Path,
+    module_path: Optional[Path],
+    max_bytes: int,
+) -> List[Block]:
+    """Give up block [11] whole rather than let the squeeze reach a measurement.
+
+    :func:`enforce_budget` shortens block [11] first, which is right, but it
+    floors every block at 160 bytes and then moves on to the next entry in
+    :data:`TRIM_ORDER` -- the layout digest.  Measured, that traded the
+    poly/active crossing table, which a curriculum rung is graded on, for a
+    160-byte stub of a cell the packet explicitly tells the model is *not* the
+    answer.  An example is worth less than any measurement, so it goes first and
+    it goes whole.
+
+    The block is replaced by a note rather than removed, because "it never
+    truncates silently" has to hold for a block that was dropped every bit as
+    much as for one that was shortened.
+    """
+    reference = next((b for b in blocks if b.index == 11), None)
+    if reference is None or reference.body.startswith("(dropped:"):
+        return blocks
+
+    def over(candidate: List[Block]) -> bool:
+        head = _nbytes(_header(cell_name, netlist, iter_dir, module_path, candidate))
+        return head + sum(b.size() for b in candidate) + FOOTER_RESERVE > max_bytes
+
+    if not over(blocks):
+        return blocks
+
+    without = [
+        Block(11, b.title, _REFERENCE_DROPPED) if b.index == 11 else b for b in blocks
+    ]
+    # Only worth giving up if giving it up is enough.  When the packet is over
+    # budget for some other reason, keeping the example and letting the ordinary
+    # squeeze run is the smaller loss.
+    return without if not over(without) else blocks
 
 
 def enforce_budget(blocks: List[Block], header_bytes: int, max_bytes: int) -> None:
@@ -3222,11 +3423,62 @@ def build_evidence(
     build_error_file: Optional[Path] = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
     digest_timeout: float = LAYOUT_DIGEST_TIMEOUT_S,
+    gate: Optional[str] = None,
 ) -> str:
-    """Build the complete evidence packet as a single string."""
+    """Build the complete evidence packet as a single string.
+
+    ``gate`` scopes the packet to one curriculum rung: ``"auto"`` derives it
+    from the measured score, a rung key forces that rung, and ``None`` / ``"off"``
+    emits the whole packet exactly as before.
+    """
+    selection = select_gate(gate, netlist, iter_dir, cell_name)
+
     blocks = build_blocks(
-        netlist, iter_dir, cell_name, module_path, build_error_file, digest_timeout
+        netlist,
+        iter_dir,
+        cell_name,
+        module_path,
+        build_error_file,
+        digest_timeout,
+        REFERENCE_GATE_BYTES if selection.active else 8000,
     )
+
+    if selection.active:
+        # Narrow the API surface before filtering, so the rung's own block [10]
+        # replaces the full one rather than sitting beside it.
+        if selection.api_focus:
+            blocks = [
+                block_api_reference(selection.api_focus) if b.index == 10 else b
+                for b in blocks
+            ]
+        blocks = [b for b in blocks if b.index in selection.keep]
+
+        # Block [2] is the verdict, and orchestrate.sh's packet_is_gradable()
+        # gates the whole "everything you need is inlined" preamble on its
+        # presence.  ALWAYS carries it, but a filter that could drop it would be
+        # a silent way to make every packet read as degraded.
+        assert any(b.index == VERDICT_BLOCK for b in blocks), (
+            "the curriculum filter dropped the verdict block"
+        )
+        blocks.insert(0, selection.objective)
+        if selection.max_bytes is not None:
+            max_bytes = min(max_bytes, selection.max_bytes)
+    elif selection.note:
+        blocks.insert(
+            0,
+            Block(
+                0,
+                "OBJECTIVE FOR THIS TURN (not available)",
+                f"(no per-turn objective: {selection.note})\n"
+                "The whole evidence packet follows. Work the priority order in the\n"
+                "instructions above: connectivity first, then shorts, then spacing.",
+            ),
+        )
+
+    blocks = _drop_example_before_cutting_evidence(
+        blocks, cell_name, netlist, iter_dir, module_path, max_bytes
+    )
+
     header = _header(cell_name, netlist, iter_dir, module_path, blocks)
     enforce_budget(blocks, _nbytes(header), max_bytes)
 
@@ -3324,6 +3576,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Byte budget for the whole packet (default: {DEFAULT_MAX_BYTES}).",
     )
     parser.add_argument(
+        "--gate",
+        default=os.environ.get("AION_GATE", ""),
+        help=(
+            "Scope the packet to one curriculum rung: 'auto' derives it from the "
+            "measured score, a rung key forces it, 'off' (the default) emits the "
+            "whole packet.  Falls back to $AION_GATE."
+        ),
+    )
+    parser.add_argument(
         "--digest-timeout",
         type=float,
         default=LAYOUT_DIGEST_TIMEOUT_S,
@@ -3346,6 +3607,7 @@ def _run(argv: Sequence[str]) -> int:
         build_error_file=Path(args.build_error_file) if args.build_error_file else None,
         max_bytes=args.max_bytes,
         digest_timeout=args.digest_timeout,
+        gate=args.gate,
     )
     sys.stdout.write(packet)
     return 0
@@ -3389,6 +3651,7 @@ __all__ = [
     "LVS_PASS_TOKENS",
     "NET_FRAGMENT_CAP",
     "NETLIST_TRIM_ORDER",
+    "REFERENCE_GATE_BYTES",
     "LVS_UNKNOWN_TOKENS",
     "TRIM_ORDER",
     "VERDICT_BLOCK",
@@ -3410,10 +3673,14 @@ __all__ = [
     "block_verdict",
     "build_blocks",
     "build_evidence",
+    "GATE_AUTO",
+    "GATE_OFF",
+    "GateSelection",
     "cap_text",
     "discover_artifacts",
     "enforce_budget",
     "extract_subckt_text",
+    "select_gate",
     "main",
     "net_fanout",
     "parse_netgen_digest",

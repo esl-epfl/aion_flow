@@ -1,0 +1,10 @@
+.subckt AION_inv_nand2_nor2_1 I0 I1 I2 O0 VDD VSS
+    XP0 I1_bar I1 VDD VDD sg13_lv_pmos w=3.826u l=0.13u ng=1 m=1
+    XN0 I1_bar I1 VSS VSS sg13_lv_nmos w=1.913u l=0.13u ng=1 m=1
+    XP1 net_p_0 I1_bar VDD VDD sg13_lv_pmos w=11.477u l=0.13u ng=1 m=1
+    XP2 net_p_1 I0 net_p_0 VDD sg13_lv_pmos w=11.477u l=0.13u ng=1 m=1
+    XP3 O0 I2 net_p_1 VDD sg13_lv_pmos w=11.477u l=0.13u ng=1 m=1
+    XN1 O0 I0 VSS VSS sg13_lv_nmos w=1.913u l=0.13u ng=1 m=1
+    XN2 O0 I2 VSS VSS sg13_lv_nmos w=1.913u l=0.13u ng=1 m=1
+    XN3 O0 I1_bar VSS VSS sg13_lv_nmos w=1.913u l=0.13u ng=1 m=1
+.ends

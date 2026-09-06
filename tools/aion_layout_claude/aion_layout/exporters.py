@@ -46,8 +46,11 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, NoReturn, Optional, Sequence, Tuple
 
 from . import metrics
+from .liberty import LibertyError, read_liberty
+from .logic import LogicError, TruthTable, truth_table
 from .metrics import GRID_TOL_UM, CellGeometry, MetricsError
 from .runner import DEFAULT_TIMEOUT, rel_to_tool, run_in_container
+from .spice_parser import SpiceParseError, Subckt, parse_spice_file
 
 
 class ExportError(RuntimeError):
@@ -55,7 +58,7 @@ class ExportError(RuntimeError):
 
 
 #: Pin names the reference flow treats as supplies rather than signals.  They go
-#: inside ``\`ifdef USE_POWER_PINS`` in the Verilog stub, which is how a
+#: inside ``\`ifdef USE_POWER_PINS`` in the Verilog model, which is how a
 #: gate-level netlist stays simulatable both with and without power nets.
 DEFAULT_POWER_PINS: Tuple[str, ...] = ("VDD", "VSS", "VPWR", "VGND", "VNB", "VPB")
 
@@ -68,11 +71,16 @@ REQUIRED_SITE = "CoreSite"
 #: exactly this; magic declares nothing, because a GDS says nothing about it.
 REQUIRED_SYMMETRY = "X Y"
 
-#: LEF spells port directions in upper case; the Verilog stub spells them lower.
+#: LEF spells port directions in upper case; the Verilog model spells them lower.
 _LEF_DIRECTION = {"input": "INPUT", "output": "OUTPUT", "inout": "INOUT"}
 
 #: Directions a Verilog port may be declared with.
 _VERILOG_DIRECTIONS = ("input", "output", "inout")
+
+#: The PDK's own cell models declare ``1ns / 10ps`` and the SDF the flow writes
+#: is in ns.  A file with no timescale next to files that have one is a
+#: simulator warning at best and a silently rescaled delay at worst.
+_TIMESCALE = "`timescale 1ns / 10ps"
 
 _CLASS_RE = re.compile(r"^[ \t]*CLASS[ \t]+([^;]*?)[ \t]*;", re.MULTILINE)
 _SITE_RE = re.compile(r"^[ \t]*SITE[ \t]+(\S+)[ \t]*;", re.MULTILINE)
@@ -536,7 +544,7 @@ def _subckt_pin_lists(text: str) -> Dict[str, List[str]]:
     This does not go through :mod:`aion_layout.spice_parser`: that parser reads
     a ``.subckt`` header as one physical line, and a PEX netlist always wraps
     its pin list onto ``+`` continuations, so the pins after the first line
-    would be silently lost.  Losing pins here would produce a Verilog stub with
+    would be silently lost.  Losing pins here would produce a Verilog model with
     a plausible but incomplete port list, which is the worst failure available.
     """
     table: Dict[str, List[str]] = {}
@@ -606,25 +614,94 @@ def pins_from_pex(pex_spice: Path | str, cell: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def export_verilog_stub(
-    pins: Iterable[str],
-    cell: str,
-    out_v: Path | str,
-    *,
-    power: Sequence[str] = DEFAULT_POWER_PINS,
-    directions: Optional[Mapping[str, str]] = None,
-) -> Path:
-    """Write the gate-level simulation stub for ``cell``.
+def _subckt_of(spice_netlist: Path | str, cell: str) -> Subckt:
+    """The parsed ``.subckt`` named ``cell``, or an error naming what is there."""
+    path = _readable(Path(spice_netlist), "SPICE netlist")
+    try:
+        subckts = parse_spice_file(path)
+    except SpiceParseError as exc:
+        raise ExportError(f"{path} cannot be read as a netlist: {exc}") from exc
+    for subckt in subckts:
+        if subckt.name.lower() == cell.lower():
+            return subckt
+    defined = ", ".join(s.name for s in subckts) or "(nothing)"
+    raise ExportError(f"{path} defines no .subckt named {cell!r}; it defines: {defined}")
 
-    Same shape as the ``verilog:`` target of ``ref_makefile_1.mk`` -- supplies
-    inside ``\\`ifdef USE_POWER_PINS``, signals sorted, ``di_``/``do_`` naming
-    read as a direction -- with one difference: the port list never ends in a
-    comma.  The makefile emits one when a cell has supplies and no signal pins,
-    and that module does not compile.
+
+def _checked_against_liberty(
+    table: TruthTable, cell: str, lib_files: Sequence[Path | str]
+) -> List[str]:
+    """Hold the solved function against every Liberty ``function`` for ``cell``.
+
+    The two are independent: this table was *derived* from the transistor
+    netlist by :mod:`aion_layout.logic`, and the Liberty function was
+    *measured* by ``aion_char`` with an ngspice ``.op`` per input vector.  They
+    are the only two statements of the cell's behaviour the flow owns, so a
+    disagreement means one of the published views is wrong and neither can be
+    trusted to say which -- there is nothing useful to publish.
+
+    Returns the lines that go into the model's header, so a reader can see what
+    was checked rather than take "generated" on faith.
     """
-    names = [str(p).strip() for p in pins]
+    notes: List[str] = []
+    for path in lib_files:
+        lib = Path(path)
+        try:
+            library = read_liberty(lib)
+            lib_cell = library.cell(cell)
+        except LibertyError as exc:
+            raise ExportError(
+                f"the function of {cell} could not be checked against {lib.name}: {exc}"
+            ) from exc
+        for output in table.outputs:
+            stated = lib_cell.functions.get(output)
+            if stated is None:
+                notes.append(f"{lib.name}: pin {output} states no function to check against")
+                continue
+            try:
+                disagrees_at = table.disagrees_at(stated, output)
+            except LogicError as exc:
+                raise ExportError(
+                    f"{lib.name} gives {cell} pin {output} the function {stated!r}, "
+                    f"which cannot be read against this netlist: {exc}"
+                ) from exc
+            if disagrees_at is not None:
+                vector = table.vector(disagrees_at)
+                raise ExportError(
+                    f"{cell} does not compute what its Liberty says it does. "
+                    f"{lib.name} gives pin {output} the function {stated!r}, which "
+                    f"aion_char measured in SPICE; the transistor netlist solves to "
+                    f"{table.expression(output, style='liberty')!r}. They first differ "
+                    "at "
+                    + " ".join(f"{pin}={value}" for pin, value in vector.items())
+                    + f", where the Liberty says {output}="
+                    + f"{1 - table.column(output)[disagrees_at]} and the netlist says "
+                    + f"{table.column(output)[disagrees_at]}. One of the two published "
+                    "views is wrong, and a Verilog model written from either would be "
+                    "a simulation that disagrees with static timing"
+                )
+            notes.append(f"{lib.name}: pin {output} function agrees")
+    return notes
+
+
+def _model_ports(
+    pins: Iterable[str],
+    table: TruthTable,
+    cell: str,
+    *,
+    power: Sequence[str],
+    directions: Optional[Mapping[str, str]],
+) -> Tuple[List[str], List[str], List[str]]:
+    """Split the pin list into supplies, outputs and inputs, and check it.
+
+    The direction of a signal pin is not taken on trust from the caller: the
+    netlist already settled it (a pin a device only gates is an input, a pin
+    wired to a channel is driven), and a ``directions`` map that contradicts
+    that is a LEF and a Verilog model that will disagree about the same cell.
+    """
+    names = [str(pin).strip() for pin in pins]
     if not names:
-        raise ExportError(f"no pins given for {cell}; a stub with no ports is not a view")
+        raise ExportError(f"no pins given for {cell}; a model with no ports is not a view")
     if any(not name for name in names):
         raise ExportError(f"blank pin name in the pin list for {cell}: {names!r}")
 
@@ -640,21 +717,91 @@ def export_verilog_stub(
     power_pins = sorted({n for n in names if n.upper() in supplies})
     signal_pins = sorted({n for n in names if n.upper() not in supplies})
 
-    def direction_of(pin: str) -> str:
-        if pin in directions:
-            return directions[pin]
-        if pin.startswith("di_"):
-            return "input"
-        if pin.startswith("do_"):
-            return "output"
-        return "inout"
+    solved = set(table.inputs) | set(table.outputs)
+    if set(signal_pins) != solved:
+        only_pins = ", ".join(sorted(set(signal_pins) - solved)) or "(none)"
+        only_netlist = ", ".join(sorted(solved - set(signal_pins))) or "(none)"
+        raise ExportError(
+            f"the pin list for {cell} and its netlist name different signals: "
+            f"only in the pin list: {only_pins}; only in the netlist: {only_netlist}. "
+            "A model whose ports are not the cell's ports cannot be connected"
+        )
 
-    # Supplies are always inout: a stub cannot drive them, and USE_POWER_PINS
-    # decides whether they exist at all.
-    entries = [("power", f"inout {pin}") for pin in power_pins]
-    entries += [("signal", f"{direction_of(pin)} {pin}") for pin in signal_pins]
+    outputs = [pin for pin in signal_pins if pin in table.outputs]
+    inputs = [pin for pin in signal_pins if pin in table.inputs]
+    for pin in signal_pins:
+        wanted = "output" if pin in outputs else "input"
+        given = directions.get(pin)
+        if given is not None and given != wanted:
+            raise ExportError(
+                f"{cell} pin {pin} was handed to the exporter as {given!r}, but the "
+                f"netlist drives it as an {wanted}; the LEF and the Verilog model "
+                "would disagree about which way the signal goes"
+            )
+    return power_pins, outputs, inputs
 
-    lines = [f"module {cell} ("]
+
+def verilog_model_text(
+    cell: str,
+    table: TruthTable,
+    *,
+    pins: Iterable[str],
+    source: str = "",
+    power: Sequence[str] = DEFAULT_POWER_PINS,
+    directions: Optional[Mapping[str, str]] = None,
+    notes: Sequence[str] = (),
+) -> str:
+    """Render the gate-level simulation model of ``cell``.
+
+    A cell model is two statements, and a post-place-and-route run needs both:
+
+    * **the function**, or the netlist that instantiates this cell drives ``z``
+      out of it forever and the testbench reports ``x`` on a design that is
+      fine;
+    * **a ``specify`` path per timing arc**, because that is what an SDF's
+      ``IOPATH`` records attach to.  A model with no ``specify`` block is
+      annotated with nothing and simulates at zero delay -- silently, since the
+      SDF reader has no path to complain about.
+
+    The delays in the block are zero on purpose: they are placeholders the SDF
+    overwrites, exactly as in the PDK's own ``sg13g2_stdcell.v``.  With no SDF
+    the cell is zero-delay, which is what every gate-level model in this flow
+    does without one.
+    """
+    power_pins, outputs, inputs = _model_ports(
+        pins, table, cell, power=power, directions=directions
+    )
+
+    header = [
+        f"// {cell} -- Verilog model for gate-level simulation.",
+        "//",
+        "// GENERATED by aion_layout.exporters"
+        + (f" from {source}" if source else "")
+        + " -- do not edit by hand.",
+        "//",
+        "// The function below is solved from the transistor netlist the layout was",
+        "// drawn against (aion_layout.logic: a DC switch-level solve, one input",
+        "// vector at a time), not transcribed from a schematic.",
+    ]
+    if notes:
+        header.append("//")
+        for note in notes:
+            header.append(f"// {note}")
+    header += [
+        "//",
+        "// The specify block carries one zero-delay path per timing arc, which is",
+        "// what an SDF IOPATH record annotates. iverilog keeps specify blocks only",
+        "// with -gspecify; Questa keeps them by default; Verilator ignores them and",
+        "// simulates this model at zero delay, which is all it ever does with a gate",
+        "// netlist. So this one file serves the timed and the untimed runs both.",
+        "",
+    ]
+
+    entries: List[Tuple[str, str]] = [("power", f"inout {pin}") for pin in power_pins]
+    entries += [("signal", f"output {pin}") for pin in outputs]
+    entries += [("signal", f"input {pin}") for pin in inputs]
+
+    lines = [_TIMESCALE, "`celldefine", f"module {cell} ("]
     for index, (kind, decl) in enumerate(entries):
         if kind == "power" and (index == 0 or entries[index - 1][0] != "power"):
             lines.append("`ifdef USE_POWER_PINS")
@@ -665,11 +812,72 @@ def export_verilog_stub(
         ):
             lines.append("`endif")
     lines.append(");")
-    lines.append("endmodule")
 
+    lines.append("")
+    lines.append("  // Function")
+    for pin in outputs:
+        lines.append(f"  assign {pin} = {table.expression(pin)};")
+
+    arcs = [(driver, pin) for pin in outputs for driver in table.support(pin)]
+    lines.append("")
+    if arcs:
+        lines.append("  // Timing")
+        lines.append("  specify")
+        for driver, pin in arcs:
+            lines.append(f"    ({driver} => {pin}) = (0.0, 0.0);")
+        lines.append("  endspecify")
+    else:
+        lines.append("  // No timing: no output of this cell responds to any input.")
+    lines.append("")
+    lines.append("endmodule")
+    lines.append("`endcelldefine")
+
+    return "\n".join(header + lines) + "\n"
+
+
+def export_verilog_model(
+    spice_netlist: Path | str,
+    cell: str,
+    out_v: Path | str,
+    *,
+    pins: Optional[Iterable[str]] = None,
+    power: Sequence[str] = DEFAULT_POWER_PINS,
+    directions: Optional[Mapping[str, str]] = None,
+    lib_files: Sequence[Path | str] = (),
+) -> Path:
+    """Write the gate-level simulation model of ``cell`` from its netlist.
+
+    ``pins`` is the port list to declare -- ``export_all`` passes the PEX one,
+    which is the layout's own -- and defaults to the netlist's.  Whichever it
+    is, it has to name the same signals the netlist does.
+
+    ``lib_files`` are cross-checked, not read: the function comes from the
+    netlist either way, and a Liberty that disagrees stops the publish.
+    """
+    subckt = _subckt_of(spice_netlist, cell)
+    try:
+        table = truth_table(subckt)
+    except LogicError as exc:
+        raise ExportError(
+            f"no Verilog model can be written for {cell}: {exc}. Publishing the empty "
+            "module that used to stand in for one is worse than publishing nothing: it "
+            "elaborates, links, and drives z out of every output for the whole "
+            "simulation"
+        ) from exc
+
+    notes = _checked_against_liberty(table, cell, lib_files)
+    text = verilog_model_text(
+        cell,
+        table,
+        pins=list(pins) if pins is not None else subckt.pins,
+        source=Path(spice_netlist).name,
+        power=power,
+        directions=directions,
+        notes=notes,
+    )
     out = Path(out_v)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text(text)
     return out
 
 
@@ -853,7 +1061,10 @@ def export_all(
 
     The LEF is built and checked first, before anything else is copied, so that
     a cell the placer would reject leaves behind a quarantined ``.lef.rejected``
-    and an error rather than a directory that looks finished.
+    and an error rather than a directory that looks finished.  Anything that
+    fails after that -- a netlist with no truth table, a Liberty whose
+    ``function`` disagrees with it -- takes the views already written with it,
+    for the same reason.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -905,18 +1116,40 @@ def export_all(
         else pins_from_spice(spice_netlist, cell)
     )
 
-    return ExportedViews(
-        cell=cell,
-        gds=export_gds(gds, out / f"{cell}.gds"),
-        lef=lef,
-        lib=_publish_libs(libs, cell, out),
-        verilog=export_verilog_stub(
-            pins, cell, out / f"{cell}.v", directions=directions
-        ),
-        spice=_copy_view(spice_netlist, out / f"{cell}.spice", "SPICE netlist"),
-        cdl=export_cdl(spice_netlist, cell, out / f"{cell}.cdl"),
-        lef_check=lef_check,
-    )
+    try:
+        return ExportedViews(
+            cell=cell,
+            gds=export_gds(gds, out / f"{cell}.gds"),
+            lef=lef,
+            lib=_publish_libs(libs, cell, out),
+            verilog=export_verilog_model(
+                spice_netlist,
+                cell,
+                out / f"{cell}.v",
+                pins=pins,
+                directions=directions,
+                lib_files=libs,
+            ),
+            spice=_copy_view(spice_netlist, out / f"{cell}.spice", "SPICE netlist"),
+            cdl=export_cdl(spice_netlist, cell, out / f"{cell}.cdl"),
+            lef_check=lef_check,
+        )
+    except ExportError as exc:
+        # A view that failed halfway through leaves the others behind, and a
+        # directory holding a GDS and a Liberty and no Verilog model is a cell
+        # somebody will pick up and place.  Every view written by this call goes
+        # out of the way of discovery, the LEF included.
+        stale = _quarantine_stale_views(out, cell, libs)
+        _reject(
+            lef,
+            f"{cell} was not published: {exc}"
+            + (
+                "\nthe views written before the failure were quarantined: "
+                + ", ".join(str(path) for path in stale)
+                if stale
+                else ""
+            ),
+        )
 
 
 __all__ = [
@@ -932,7 +1165,7 @@ __all__ = [
     "export_cdl",
     "export_gds",
     "export_lef",
-    "export_verilog_stub",
+    "export_verilog_model",
     "pins_from_pex",
     "pins_from_spice",
 ]

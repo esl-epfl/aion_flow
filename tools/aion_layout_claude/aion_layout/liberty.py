@@ -409,7 +409,8 @@ class LibCell:
     ``area`` and ``leakage`` are ``None`` when the cell does not state them.
     ``area`` is the value the Liberty file *claims*; the flow's area verdict
     comes from :mod:`aion_layout.metrics` instead, and this one is only ever
-    used to check that the two agree.
+    used to check that the two agree.  ``functions`` is the same kind of
+    claim about behaviour rather than size.
     """
 
     name: str
@@ -419,6 +420,12 @@ class LibCell:
     outputs: Tuple[str, ...]
     arcs: Tuple[TimingArc, ...]
     input_caps: Dict[str, float]
+    #: ``function`` per output pin, exactly as the file spells it -- the
+    #: library's own statement of what the cell computes, which
+    #: :mod:`aion_layout.exporters` holds against the netlist the layout was
+    #: drawn from before it publishes a Verilog model.  A pin the file gives
+    #: no function is absent, never an empty string.
+    functions: Dict[str, str] = dc.field(default_factory=dict)
 
 
 @dc.dataclass(frozen=True)
@@ -621,6 +628,7 @@ def _build_cell(
     outputs: List[str] = []
     caps: Dict[str, float] = {}
     arcs: List[TimingArc] = []
+    functions: Dict[str, str] = {}
 
     for pin in group.sub("pin"):
         if not pin.args:
@@ -634,6 +642,9 @@ def _build_cell(
                 caps[pin_name] = cap * cap_pf
         if direction in ("output", "inout"):
             outputs.append(pin_name)
+            function = pin.attr("function")
+            if function is not None:
+                functions[pin_name] = _unquote(function)
         if direction not in ("input", "output", "inout", "internal"):
             raise LibertyError(
                 f"{scope}: pin {pin_name} declares direction "
@@ -652,6 +663,7 @@ def _build_cell(
         outputs=tuple(outputs),
         arcs=tuple(arcs),
         input_caps=caps,
+        functions=functions,
     )
 
 

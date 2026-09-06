@@ -396,7 +396,7 @@ groups them by directory, which `output_constr.md` allows.
 | GDS | `.gds` | required | streamout |
 | LEF | `.lef` | required | placement, routing blockages, pins |
 | Liberty | `.lib` | required | STA and the resizer |
-| Verilog | `.v` | recommended | gate-level simulation |
+| Verilog | `.v` | recommended | gate-level simulation, before and after PnR |
 | SPICE | `.spice` | recommended | LVS |
 | CDL | `.cdl` | recommended | LVS |
 
@@ -458,6 +458,88 @@ at all. And `make verify` applies the same size constraints straight off the
 GDS, so a cell that is the wrong width is caught while iterating rather than at
 export.
 
+### The Verilog model
+
+The `.v` is the only view that says what the cell **computes**, and it is the
+one a gate-level simulation reads. It has to carry two things:
+
+```verilog
+`timescale 1ns / 10ps
+`celldefine
+module AION_inv_nand2_nor2_1 (
+`ifdef USE_POWER_PINS
+    inout VDD,
+    inout VSS,
+`endif
+    output O0,
+    input I0,
+    input I1,
+    input I2
+);
+
+  // Function
+  assign O0 = ~I0 & I1 & ~I2;
+
+  // Timing
+  specify
+    (I0 => O0) = (0.0, 0.0);
+    (I1 => O0) = (0.0, 0.0);
+    (I2 => O0) = (0.0, 0.0);
+  endspecify
+
+endmodule
+`endcelldefine
+```
+
+**The function**, or the netlist that instantiates this cell drives `z` out of
+it for the whole run, which reaches the testbench as `x` on a design that is
+fine. **A `specify` path per timing arc**, because that is what an SDF's
+`IOPATH` records attach to: a model with no `specify` block is annotated with
+nothing and simulates at zero delay, and nothing complains, because the SDF
+reader has no path to complain *about*. The delays in it are zero on purpose —
+they are placeholders the SDF overwrites, exactly as in the PDK's own
+`sg13g2_stdcell.v`.
+
+One file serves every stage. `iverilog` keeps `specify` blocks only with
+`-gspecify` (`-ginterconnect` for the SDF's wire delays, `-Ttyp` to pick the
+triplet); Questa keeps them by default; Verilator drops them and ignores
+`$sdf_annotate` outright, so a Verilator run is a function check at zero delay —
+which is all Verilator ever is on a gate netlist, PDK cells included.
+
+The function is **solved, not assumed**. `aion_layout.logic` reads the
+transistor netlist the layout was drawn and LVS'd against and evaluates it one
+input vector at a time: a node is 1 when conducting devices tie it to VDD and
+nothing can tie it to VSS, and 0 for the mirror of that, repeated until every
+gate-driven node in the cell has a level. That handles a merged AION cell,
+whose second stage is gated by the first one's drain, with no assumption that
+the netlist is one complementary gate or that its pull-up is series-parallel —
+the SG13G2 MUXes, which pass data through transmission gates, solve too. The
+result is minimised (Quine-McCluskey) and then re-evaluated against the truth
+table it came from before it is written.
+
+Then it is **checked against the Liberty**, which states the same fact by a
+different route: `aion_char` measured `function` with an ngspice `.op` per input
+vector. Two independent answers, and `export_all` refuses to publish the cell at
+all when they differ — naming the vector where they first disagree, because at
+that point one of the two views is wrong and neither can say which. When they
+agree, the model records it:
+
+```verilog
+// AION_inv_nand2_nor2_1_typ_1p20V_25C.lib: pin O0 function agrees
+```
+
+A cell whose netlist has **no truth table** is refused rather than published
+empty: feedback (a latch or a flop holds state), a node nothing drives in some
+state (a tri-state output), a node tied to both rails, a device that is neither
+an nmos nor a pmos. Each of those is reported by name and by the input vector
+that exposed it. Such a cell needs a hand-written model; what it must not get is
+the empty module that would elaborate and simulate as `x`.
+
+The same rule as the LEF applies to everything after it: a publish that fails
+here quarantines the views it had already written, rather than leaving a
+directory holding a GDS, a Liberty and no model — discovery groups by stem, and
+that directory is a cell somebody places.
+
 ## Project structure
 
 ```text
@@ -491,7 +573,9 @@ tools/aion_layout_claude/
 │   ├── steps.py                    # build, render, drc, lvs, verify, the verdict
 │   ├── baseline.py                 # abut the PDK cells into the comparison row
 │   ├── characterize.py             # PEX, then ngspice over the corners
-│   ├── liberty.py                  # read a .lib back: cells, arcs, tables
+│   ├── liberty.py                  # read a .lib back: cells, arcs, functions, tables
+│   ├── logic.py                    # what the netlist computes: switch-level truth
+│   │                               #   table, minimised expression, .lib functions
 │   ├── exporters.py                # the six views, and the LEF checks
 │   ├── compare.py                  # candidate vs baseline, and the COMPARE: line
 │   ├── evidence.py                 # the packet the model reads between edits
@@ -517,9 +601,9 @@ tools/aion_layout_claude/
 │
 ├── tests/
 │   ├── conftest.py                 # fixtures; the committed reports stay read-only
-│   ├── test_*.py                   # nine modules: the verdict surface, absence-is-
+│   ├── test_*.py                   # ten modules: the verdict surface, absence-is-
 │   │                               #   not-clean, metrics, runner, spice_parser,
-│   │                               #   scaffold, liberty, exporters, compare
+│   │                               #   scaffold, liberty, logic, exporters, compare
 │   └── fixtures/                   # real clean and dirty DRC/LVS output, committed
 │
 └── build/                          # run output, one directory per cell
@@ -645,13 +729,21 @@ values in `tech.py` are the ones you must *draw* rather than the smallest number
 a rule mentions (the Via1 enclosures are the 50 nm endcap figures, not `V1.c`'s
 10 nm — the comment there explains why).
 
-**Every signal pin in the Verilog stub is `inout`.**
-`exporters.export_verilog_stub` takes a `directions` map and no caller passes
-one, so a cell's ports come out as `inout I0, inout I1, inout I2, inout O0` with
-only VDD/VSS distinguished. That is safe for elaboration and useless for
-anything that wants to know which way a signal goes. The information exists —
-the generator's `Port.direction`, and the netlist — and nothing carries it to
-the exporter yet.
+**The Verilog model is combinational-only, and says so by refusing.**
+`aion_layout.logic` solves a DC truth table, so a cell that holds state has no
+model and `make export` stops instead of publishing one. That is the right
+answer for every cell this tool has drawn — AION cells are merged combinational
+gates — but a sequential AION cell would need a hand-written model and a
+`specify` block with the timing checks that go with it, and nothing here writes
+either. The refusal names the node and the input vector, which is at least the
+information a hand-written model needs.
+
+**The `specify` block carries plain module paths, not conditional ones.**
+`(I0 => O0)` per arc, one delay pair each. A Liberty with state-dependent arcs
+(`when : "..."` on a `timing()` group) publishes several delays for the same
+pin pair, and the SDF then carries `COND` records that this model has no
+`ifnone`/conditional paths to receive: the last matching annotation wins.
+`aion_char` writes no `when`-qualified delay arcs today, so nothing is lost yet.
 
 **Only one cell has ever been through the flow.** Everything in this README is
 measured, and all of it is measured on `AION_inv_nand2_nor2_1`: three inputs,

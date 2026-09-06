@@ -23,6 +23,8 @@ a CDL netlist (which is not connectivity).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from conftest import CELL, optional_module
@@ -225,30 +227,125 @@ def test_describe_states_the_verdict(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Verilog stub
+# The Verilog model
+#
+# This view used to be a port list and an empty module.  That is not a smaller
+# model, it is a *wrong* one: a netlist that instantiates it elaborates, links,
+# runs, and drives z out of the cell for the whole simulation, which reaches
+# the testbench as x on a design that is fine.  So the tests here are about the
+# two things the file has to carry -- the function, and a specify path per arc
+# for an SDF to annotate -- and about refusing to write it at all when either
+# cannot be established.
 # ---------------------------------------------------------------------------
 
 PINS = ["I0", "I1", "I2", "O0", "VDD", "VSS"]
 
+logic = optional_module("aion_layout.logic")
 
-def test_the_stub_is_a_module_with_every_pin(tmp_path):
-    """A stub missing a port silently changes the netlist it stands in for."""
-    out = exporters.export_verilog_stub(PINS, CELL, tmp_path / "cell.v")
-    text = out.read_text()
 
-    assert text.startswith(f"module {CELL} ("), (
-        f"the module header names the cell: {text.splitlines()[0]!r}"
+def model(netlist_path, tmp_path, *, name="cell.v", **kwargs):
+    """The published model of the worked cell, as text."""
+    return exporters.export_verilog_model(
+        netlist_path, CELL, tmp_path / name, **kwargs
+    ).read_text()
+
+
+def liberty_stating(tmp_path, function, *, name="tiny.lib", cell=CELL):
+    """A minimal Liberty whose only interesting claim is one function."""
+    path = tmp_path / name
+    path.write_text(
+        "library (tiny) {\n"
+        '  time_unit : "1ns";\n'
+        "  capacitive_load_unit (1, pf);\n"
+        f"  cell ({cell}) {{\n"
+        "    pin (I0) { direction : input; }\n"
+        "    pin (I1) { direction : input; }\n"
+        "    pin (I2) { direction : input; }\n"
+        "    pin (O0) {\n"
+        "      direction : output;\n"
+        f'      function : "{function}";\n'
+        "    }\n"
+        "  }\n"
+        "}\n"
     )
-    assert text.rstrip().endswith("endmodule"), (
-        f"the module has to be closed: {text[-40:]!r}"
+    return path
+
+
+def test_the_model_is_a_module_with_every_pin(netlist_path, tmp_path):
+    """A model missing a port silently changes the netlist it stands in for."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+
+    assert f"module {CELL} (" in text, f"the module header names the cell:\n{text}"
+    assert text.rstrip().endswith("`endcelldefine"), (
+        f"the module has to be closed, inside `celldefine as the PDK's own models "
+        f"are:\n{text[-80:]}"
     )
+    assert "endmodule" in text
     for pin in PINS:
-        assert pin in text, f"port {pin} is missing from the stub:\n{text}"
+        assert pin in text, f"port {pin} is missing from the model:\n{text}"
 
 
-def test_supplies_sit_inside_ifdef_use_power_pins(tmp_path):
+def test_the_module_body_is_not_empty(netlist_path, tmp_path):
+    """The whole point: an empty module is a cell that drives z forever."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+    body = text[text.index(");") : text.index("endmodule")]
+
+    assert "assign O0 =" in body, (
+        f"the model has to say what the cell computes:\n{body}"
+    )
+    assert body.strip(), "the module body is empty"
+
+
+def test_the_body_computes_what_the_netlist_computes(netlist_path, tmp_path):
+    """Read the emitted expression back and grade it against the transistors."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+    line = next(l for l in text.splitlines() if l.strip().startswith("assign O0"))
+    expression = line.split("=", 1)[1].strip().rstrip(";")
+
+    table = logic.truth_table(
+        optional_module("aion_layout.spice_parser").parse_first_subckt(netlist_path)
+    )
+    assert table.disagrees_at(expression, "O0") is None, (
+        f"the model computes {expression!r}, the netlist computes "
+        f"{table.expression('O0')!r}"
+    )
+
+
+def test_a_specify_path_is_written_for_every_arc(netlist_path, tmp_path):
+    """No specify path means no SDF IOPATH lands, and no delay, silently."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+
+    assert "specify" in text and "endspecify" in text, (
+        f"an SDF has nothing to attach to without a specify block:\n{text}"
+    )
+    for pin in ("I0", "I1", "I2"):
+        assert f"({pin} => O0) = (0.0, 0.0);" in text, (
+            f"the {pin}->O0 arc has no path for the SDF to annotate:\n{text}"
+        )
+
+
+def test_the_delays_in_the_specify_block_are_zero(netlist_path, tmp_path):
+    """They are placeholders the SDF overwrites; a guess here would survive it."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+    paths = [l.strip() for l in text.splitlines() if "=>" in l]
+
+    assert paths, f"no module paths at all:\n{text}"
+    assert all(p.endswith("= (0.0, 0.0);") for p in paths), (
+        f"a non-zero delay in the model is a delay no SDF corner asked for: {paths}"
+    )
+
+
+def test_the_model_declares_a_timescale(netlist_path, tmp_path):
+    """Next to files that declare one, a file that does not is a rescaled delay."""
+    text = model(netlist_path, tmp_path, pins=PINS)
+    assert "`timescale 1ns / 10ps" in text, (
+        f"the PDK's own models declare 1ns / 10ps and the SDF is in ns:\n{text}"
+    )
+
+
+def test_supplies_sit_inside_ifdef_use_power_pins(netlist_path, tmp_path):
     """A power port outside the guard breaks every non-power simulation."""
-    text = exporters.export_verilog_stub(PINS, CELL, tmp_path / "cell.v").read_text()
+    text = model(netlist_path, tmp_path, pins=PINS)
     lines = text.splitlines()
 
     assert "`ifdef USE_POWER_PINS" in lines, (
@@ -268,16 +365,18 @@ def test_supplies_sit_inside_ifdef_use_power_pins(tmp_path):
         )
 
 
-def test_the_port_list_never_ends_in_a_comma(tmp_path):
+def test_the_port_list_never_ends_in_a_comma(netlist_path, tmp_path):
     """A trailing comma is a module that does not compile."""
-    for pins in (PINS, ["VDD", "VSS"], ["I0", "O0"], ["O0", "VDD", "VSS"]):
-        text = exporters.export_verilog_stub(
-            pins, CELL, tmp_path / "cell.v"
-        ).read_text()
+    table = logic.truth_table(
+        optional_module("aion_layout.spice_parser").parse_first_subckt(netlist_path)
+    )
+    for pins in (PINS, ["I0", "I1", "I2", "O0"]):
+        text = exporters.verilog_model_text(CELL, table, pins=pins)
         declarations = [
             line.strip()
             for line in text.splitlines()
-            if line.startswith("    ")
+            if line.startswith("    ") and line.strip().split()[0] in
+            ("input", "output", "inout")
         ]
         assert declarations, f"no port declarations were emitted for {pins}:\n{text}"
         assert not declarations[-1].endswith(","), (
@@ -289,37 +388,163 @@ def test_the_port_list_never_ends_in_a_comma(tmp_path):
         )
 
 
-def test_declared_directions_are_honoured(tmp_path):
-    """A stub with every port `inout` hides a direction error until synthesis."""
-    text = exporters.export_verilog_stub(
-        PINS,
-        CELL,
-        tmp_path / "cell.v",
-        directions={"I0": "input", "I1": "input", "I2": "input", "O0": "output"},
-    ).read_text()
+def test_the_directions_come_from_the_netlist(netlist_path, tmp_path):
+    """A model with every port `inout` hides a direction error until synthesis."""
+    text = model(netlist_path, tmp_path, pins=PINS)
 
-    assert "input I0" in text and "output O0" in text, (
-        f"the given directions must reach the stub:\n{text}"
-    )
+    assert "output O0" in text, f"the driven pin is an output:\n{text}"
+    for pin in ("I0", "I1", "I2"):
+        assert f"input {pin}" in text, f"{pin} only gates devices:\n{text}"
     assert "inout VDD" in text, (
-        f"a supply is always inout; a stub cannot drive it:\n{text}"
+        f"a supply is always inout; a model cannot drive it:\n{text}"
     )
 
 
-def test_an_unusable_direction_is_refused(tmp_path):
+def test_a_direction_contradicting_the_netlist_is_refused(netlist_path, tmp_path):
+    """The LEF and the model would then disagree about which way O0 goes."""
     with pytest.raises(ExportError) as excinfo:
-        exporters.export_verilog_stub(
-            PINS, CELL, tmp_path / "cell.v", directions={"I0": "in"}
-        )
+        model(netlist_path, tmp_path, pins=PINS, directions={"O0": "input"})
+    assert "O0" in str(excinfo.value), (
+        f"the refusal must name the port it could not use: {excinfo.value}"
+    )
+
+
+def test_an_unusable_direction_is_refused(netlist_path, tmp_path):
+    with pytest.raises(ExportError) as excinfo:
+        model(netlist_path, tmp_path, pins=PINS, directions={"I0": "in"})
     assert "I0" in str(excinfo.value), (
         f"the refusal must name the port it could not use: {excinfo.value}"
     )
 
 
-def test_a_stub_with_no_pins_is_refused(tmp_path):
+def test_a_pin_list_that_is_not_the_netlists_is_refused(netlist_path, tmp_path):
+    """A model whose ports are not the cell's ports cannot be connected."""
+    with pytest.raises(ExportError) as excinfo:
+        model(netlist_path, tmp_path, pins=PINS + ["I3"])
+    assert "I3" in str(excinfo.value), excinfo.value
+
+
+def test_a_model_with_no_pins_is_refused(netlist_path, tmp_path):
     """A module with no ports is not a view of anything."""
     with pytest.raises(ExportError):
-        exporters.export_verilog_stub([], CELL, tmp_path / "cell.v")
+        model(netlist_path, tmp_path, pins=[])
+
+
+def test_a_liberty_that_agrees_is_recorded_in_the_model(netlist_path, tmp_path):
+    """What was checked is written down, so it is not taken on faith."""
+    lib = liberty_stating(tmp_path, "I1*!I0*!I2")
+    text = model(netlist_path, tmp_path, pins=PINS, lib_files=[lib])
+    assert "function agrees" in text, (
+        f"the header has to record the cross-check that ran:\n{text}"
+    )
+
+
+def test_a_liberty_that_disagrees_stops_the_publish(netlist_path, tmp_path):
+    """Two views of the same cell, and no way to tell which one is right.
+
+    The Liberty function is what static timing and the resizer believe; the
+    netlist is what the layout was drawn and LVS'd against.  A Verilog model
+    written from either one would be a simulation that disagrees with STA.
+    """
+    lib = liberty_stating(tmp_path, "I1*I0*!I2")  # I0 the wrong way round
+    with pytest.raises(ExportError) as excinfo:
+        model(netlist_path, tmp_path, pins=PINS, lib_files=[lib])
+    message = str(excinfo.value)
+
+    assert "O0" in message and "I1*I0*!I2" in message, (
+        f"the refusal must quote the function it disagreed with: {message}"
+    )
+    assert "I0=" in message and "I1=" in message, (
+        f"and name the vector where the two first differ: {message}"
+    )
+    assert not (tmp_path / "cell.v").exists(), (
+        "a model must not be left behind by a publish that was refused"
+    )
+
+
+def test_a_liberty_naming_another_cells_pins_is_refused(netlist_path, tmp_path):
+    """The loudest evidence there is that the two files are not the same cell."""
+    lib = liberty_stating(tmp_path, "A*!B")
+    with pytest.raises(ExportError) as excinfo:
+        model(netlist_path, tmp_path, pins=PINS, lib_files=[lib])
+    assert "A" in str(excinfo.value), excinfo.value
+
+
+def test_a_liberty_that_cannot_be_read_stops_the_publish(netlist_path, tmp_path):
+    """A cross-check that silently does not run is not a cross-check."""
+    broken = tmp_path / "broken.lib"
+    broken.write_text("library (tiny) {\n  cell (nothing) {\n")
+    with pytest.raises(ExportError):
+        model(netlist_path, tmp_path, pins=PINS, lib_files=[broken])
+
+
+def test_a_cell_with_no_truth_table_is_refused(tmp_path):
+    """A latch has no ``assign``, and inventing one is worse than refusing."""
+    netlist = tmp_path / "latch.spice"
+    netlist.write_text(
+        """.subckt LATCH D GATE Q VDD VSS
+XP0 qb Q VDD VDD sg13_lv_pmos w=1u l=0.13u
+XN0 qb Q VSS VSS sg13_lv_nmos w=740n l=0.13u
+XP1 Q qb VDD VDD sg13_lv_pmos w=1u l=0.13u
+XN1 Q qb VSS VSS sg13_lv_nmos w=740n l=0.13u
+XP2 Q GATE D VDD sg13_lv_pmos w=1u l=0.13u
+XN2 Q GATE D VSS sg13_lv_nmos w=740n l=0.13u
+.ends
+"""
+    )
+    with pytest.raises(ExportError) as excinfo:
+        exporters.export_verilog_model(netlist, "LATCH", tmp_path / "latch.v")
+    assert "drives z" in str(excinfo.value), (
+        f"the refusal has to say what publishing anyway would cost: {excinfo.value}"
+    )
+    assert not (tmp_path / "latch.v").exists()
+
+
+def test_a_netlist_without_the_cell_is_refused(netlist_path, tmp_path):
+    with pytest.raises(ExportError) as excinfo:
+        exporters.export_verilog_model(netlist_path, "not_a_cell", tmp_path / "x.v")
+    assert CELL in str(excinfo.value), (
+        f"the refusal names what the netlist does define: {excinfo.value}"
+    )
+
+
+def test_a_publish_that_fails_late_leaves_nothing_discoverable(
+    monkeypatch, tmp_path, netlist_path, known_gds
+):
+    """The Verilog model is written last, and it can still refuse.
+
+    ``export_lef`` is the one step that needs the container, so it is replaced
+    here by a LEF that passes every check -- the rest of ``export_all`` is the
+    code under test.  What it must not do is leave a directory holding a GDS, a
+    Liberty and a LEF and no Verilog model: discovery groups by stem, so that
+    directory is a cell somebody places.
+    """
+    out = tmp_path / "final"
+    out.mkdir()
+
+    def fake_lef(gds, cell, path, **kwargs):
+        Path(path).write_text(lef_text())
+        return Path(path)
+
+    monkeypatch.setattr(exporters, "export_lef", fake_lef)
+
+    with pytest.raises(ExportError) as excinfo:
+        exporters.export_all(
+            cell=CELL,
+            gds=known_gds,
+            spice_netlist=netlist_path,
+            lib_files=[liberty_stating(tmp_path, "I1*I0*!I2")],  # the wrong function
+            out_dir=out,
+        )
+    assert "was not published" in str(excinfo.value), excinfo.value
+
+    left = sorted(p.name for p in out.iterdir())
+    assert not any(name.endswith((".gds", ".lef", ".lib", ".v")) for name in left), (
+        f"a half-published cell was left behind: {left}"
+    )
+    assert any(name.endswith(".rejected") for name in left), (
+        f"the evidence has to be kept, under a name discovery ignores: {left}"
+    )
 
 
 # ---------------------------------------------------------------------------

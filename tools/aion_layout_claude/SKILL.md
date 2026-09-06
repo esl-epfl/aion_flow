@@ -298,3 +298,8 @@ almost never the routing.
 - **The cell must stay row-legal**: height exactly 3780 nm, width an exact multiple of
   480 nm, `PIN VDD` and `PIN VSS` present. `make verify` checks it and `make export`
   refuses to publish a cell that fails it.
+- **The Verilog model is solved from the netlist, not written by you.** `make export`
+  derives the cell's function from the transistor netlist, checks it against the
+  `function` the characterizer measured in SPICE, and refuses to publish anything when
+  the two disagree or when the netlist has no truth table (feedback, a node nothing
+  drives). A refusal there is a real finding about the cell — do not work around it.

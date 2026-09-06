@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "tool": "klayout",
+  "cell": "AION_inv_nand2_nor2_1",
+  "exit_status": 0,
+  "databases": [
+    "AION_inv_nand2_nor2_1_AION_inv_nand2_nor2_1_full.lyrdb"
+  ]
+}

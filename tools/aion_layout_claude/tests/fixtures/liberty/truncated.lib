@@ -1,0 +1,70 @@
+/*
+ * Hand-written Liberty fixture: the AION candidate cell.
+ *
+ * Every number here is chosen so that a reader can check the parser by hand:
+ *   - one time unit is 1 ns and one capacitance unit is 1 pF, so a Library
+ *     that reports anything but time_unit_ns == 1.0 / cap_unit_pf == 1.0 has
+ *     misread its own header;
+ *   - every table is 2x2 on the SAME index pair, index_1 = 0.010 / 0.100 ns of
+ *     input slew and index_2 = 0.0010 / 0.0100 pF of load, so a lookup at a
+ *     grid point must return a value that literally appears in the file and a
+ *     lookup at the centre must return the mean of the four corners;
+ *   - the four corners of every table are an arithmetic square (v, v+0.02,
+ *     v+0.04, v+0.06), whose centre is therefore v+0.03 exactly.
+ *
+ * This cell has three arcs.  baseline.lib deliberately has only two, so a
+ * comparison over the pair has to say something about the third rather than
+ * quietly averaging over whatever both happen to have.
+ */
+library (aion_candidate_typ) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  pulling_resistance_unit : "1kohm";
+  leakage_power_unit : "1nW";
+  capacitive_load_unit (1, pf);
+
+  nom_voltage : 1.2;
+  nom_temperature : 27.0;
+  nom_process : 1.0;
+
+  lu_table_template (del_2x2) {
+    variable_1 : input_net_transition;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("0.0100, 0.1000");
+    index_2 ("0.0010, 0.0100");
+  }
+
+  cell (AION_inv_nand2_nor2_1) {
+    area : 10.8864;
+    cell_leakage_power : 1.5000;
+
+    pin (I0) {
+      direction : input;
+      capacitance : 0.0012;
+    }
+    pin (I1) {
+      direction : input;
+      capacitance : 0.0015;
+    }
+    pin (I2) {
+      direction : input;
+      capacitance : 0.0011;
+    }
+    pin (O0) {
+      direction : output;
+      function : "!((!I1 & I0) | I2)";
+      max_capacitance : 0.0500;
+
+      timing () {
+        related_pin : "I0";
+        timing_sense : negative_unate;
+        cell_rise (del_2x2) {
+          index_1 ("0.0100, 0.1000");
+          index_2 ("0.0010, 0.0100");
+          values ("0.0200, 0.0400", \
+                  "0.0600, 0.0800");
+        }
+        cell_fall (del_2x2) {
+          index_1 ("0.0100, 0.1000");

@@ -19,6 +19,10 @@ REPO_ROOT := $(realpath .)
         aion-char-lib-template aion-char-cells aion-char-verify-spice \
         aion-char-clean aion-char-clean-tb aion-char-clean-lib \
         aion-char-clean-build \
+        aion-layout-resize aion-layout-scaffold aion-layout-gds aion-layout-png aion-layout-drc \
+        aion-layout-lvs aion-layout-verify aion-layout-pex aion-layout-evidence \
+        aion-layout-baseline aion-layout-characterize aion-layout-compare \
+        aion-layout-export aion-layout-flow aion-layout-test aion-layout-clean \
         split-spice-cells merge-spice-cells run-aion-minimizer-batch \
         aion-minimizer-run aion-minimizer-verify-spice aion-minimizer-clean \
         aion-minimizer-test \
@@ -287,6 +291,8 @@ AION_CHAR_VARS := \
 	$(if $(SLEWS),SLEWS="$(SLEWS)") \
 	$(if $(LOADS),LOADS="$(LOADS)") \
 	$(if $(JOBS),JOBS=$(JOBS)) \
+	$(if $(RESIZED),RESIZED=$(RESIZED)) \
+	$(if $(MIN_DEPTH),MIN_DEPTH=$(MIN_DEPTH)) \
 	$(if $(AREA),AREA=$(AREA)) \
 	$(if $(DRIVER),DRIVER=$(DRIVER)) \
 	$(if $(DRIVER_IN),DRIVER_IN=$(DRIVER_IN)) \
@@ -354,6 +360,78 @@ aion-char-verify-spice: ## Verify a custom SPICE netlist for CELL (CELL=..., SPI
 		$(AION_CHAR_VARS) \
 		NETLIST=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(NETLIST))) \
 		MODULE=$(CELL) CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(SPICE)))$(AION_CHAR_DOCKER_SUFFIX)
+
+# ---------------------------------------------------------------------------
+# aion_layout — standard-cell layout, verification, characterization, export
+#
+# The tool owns its own container calls, so unlike aion_char these targets are
+# NOT wrapped in the docker runner: they run on the host and the tool decides
+# per step whether that step belongs in the container.
+# ---------------------------------------------------------------------------
+AION_LAYOUT_DIR := tools/aion_layout_claude
+
+# Every variable the sub-Makefile understands, forwarded only when set, so the
+# sub-Makefile's own defaults (the worked example) keep working with no argument.
+# NOTE: this Makefile's own NETLIST already means the aion_opt input netlist and
+# is defaulted, so forwarding it here would silently hand the layout tool a
+# post-synthesis Verilog file.  The layout netlist has its own name.
+AION_LAYOUT_VARS = \
+	$(if $(CELL),CELL=$(CELL)) \
+	$(if $(CELL_MODULE),CELL_MODULE=$(CELL_MODULE)) \
+	$(if $(LAYOUT_NETLIST),NETLIST=$(LAYOUT_NETLIST)) \
+	$(if $(BASELINE),BASELINE=$(BASELINE)) \
+	$(if $(BUILD_DIR_LAYOUT),BUILD_DIR=$(BUILD_DIR_LAYOUT)) \
+	$(if $(FINAL_DIR),FINAL_DIR=$(FINAL_DIR)) \
+	$(if $(CORNERS),CORNERS="$(CORNERS)") \
+	$(if $(JOBS),JOBS=$(JOBS))
+
+aion-layout-resize: ## Widen a netlist's series stacks into a new, area-capped cell
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) resize $(AION_LAYOUT_VARS)
+
+aion-layout-scaffold: ## Scaffold a cell generator from a SPICE netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) scaffold $(AION_LAYOUT_VARS)
+
+aion-layout-gds: ## Build the GDS from the cell generator
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) gds $(AION_LAYOUT_VARS)
+
+aion-layout-png: ## Render the layout to a PNG
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) png $(AION_LAYOUT_VARS)
+
+aion-layout-drc: ## Run Magic + KLayout DRC on the cell
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) drc $(AION_LAYOUT_VARS)
+
+aion-layout-lvs: ## Run Magic + Netgen LVS against the netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) lvs $(AION_LAYOUT_VARS)
+
+aion-layout-verify: ## Build + DRC + LVS, print one RESULT: line
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) verify $(AION_LAYOUT_VARS)
+
+aion-layout-pex: ## Extract the full-RC parasitic netlist with Magic
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) pex $(AION_LAYOUT_VARS)
+
+aion-layout-evidence: ## Print the evidence packet for the current layout
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) evidence $(AION_LAYOUT_VARS)
+
+aion-layout-baseline: ## Build and verify the abutted PDK-cell reference layout
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) baseline $(AION_LAYOUT_VARS)
+
+aion-layout-characterize: ## Characterize the cell into Liberty .lib files from the PEX netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) characterize $(AION_LAYOUT_VARS)
+
+aion-layout-compare: ## Compare the cell against the abutted baseline on area and delay
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) compare $(AION_LAYOUT_VARS)
+
+aion-layout-export: ## Export gds/lef/lib/v/spice/cdl views
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) export $(AION_LAYOUT_VARS)
+
+aion-layout-flow: ## Run the whole mechanical chain: verify, pex, baseline, characterize, compare, export
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) flow $(AION_LAYOUT_VARS)
+
+aion-layout-test: ## Run the aion_layout host-side test suite
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) test
+
+aion-layout-clean: ## Remove aion_layout build outputs
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) clean $(AION_LAYOUT_VARS)
 
 # ---------------------------------------------------------------------------
 # SPICE split / merge helper

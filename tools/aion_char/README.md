@@ -70,6 +70,8 @@ Everything runs inside the EDA container — the PDK, cell models, and device mo
 | `LOADS` | 7 values | Output loads for characterization |
 | `JOBS` | `8` | Parallel jobs for characterization |
 | `AREA` | — | Cell area override for `.lib` |
+| `AREA_LEF` | — | LEF file to take the `.lib` area from, as `w*h` of its `SIZE` (`[CELL=]FILE`; used when `AREA` is unset) |
+| `AREA_GDS` | — | GDS file to take the `.lib` area from, as the prBoundary (189/4) bbox (`[CELL=]FILE`; used when neither `AREA` nor `AREA_LEF` is set) |
 | `DRIVER` / `DRIVER_IN` / `DRIVER_OUT` | — | Optional driver cell for characterization |
 | `VERIFY` | `1` | Set to `0` to skip Liberty verification |
 | `KEEP` | `0` | Set to `1` to keep ngspice decks |

@@ -1,0 +1,144 @@
+
+Circuit 1 cell sg13_lv_nmos and Circuit 2 cell sg13_lv_nmos are black boxes.
+Warning: Equate pins:  cell sg13_lv_nmos is a placeholder, treated as a black box.
+Warning: Equate pins:  cell sg13_lv_nmos is a placeholder, treated as a black box.
+
+Subcircuit pins:
+Circuit 1: sg13_lv_nmos                    |Circuit 2: sg13_lv_nmos                    
+-------------------------------------------|-------------------------------------------
+1                                          |1                                          
+2                                          |2                                          
+3                                          |3                                          
+4                                          |4                                          
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes sg13_lv_nmos and sg13_lv_nmos are equivalent.
+
+Circuit 1 cell sg13_lv_pmos and Circuit 2 cell sg13_lv_pmos are black boxes.
+Warning: Equate pins:  cell sg13_lv_pmos is a placeholder, treated as a black box.
+Warning: Equate pins:  cell sg13_lv_pmos is a placeholder, treated as a black box.
+
+Subcircuit pins:
+Circuit 1: sg13_lv_pmos                    |Circuit 2: sg13_lv_pmos                    
+-------------------------------------------|-------------------------------------------
+1                                          |1                                          
+2                                          |2                                          
+3                                          |3                                          
+4                                          |4                                          
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes sg13_lv_pmos and sg13_lv_pmos are equivalent.
+
+Cell AION_inv_nand2_nor2_1 (0) disconnected node: I0
+Cell AION_inv_nand2_nor2_1 (0) disconnected node: I2
+Cell AION_inv_nand2_nor2_1 (0) disconnected node: O0
+Cell AION_inv_nand2_nor2_1 (0) disconnected node: VSS
+Cell AION_inv_nand2_nor2_1 (0) disconnected node: VDD
+Subcircuit summary:
+Circuit 1: AION_inv_nand2_nor2_1           |Circuit 2: AION_inv_nand2_nor2_1           
+-------------------------------------------|-------------------------------------------
+sg13_lv_nmos (3)                           |sg13_lv_nmos (4) **Mismatch**              
+sg13_lv_pmos (3)                           |sg13_lv_pmos (4) **Mismatch**              
+Number of devices: 6 **Mismatch**          |Number of devices: 8 **Mismatch**          
+Number of nets: 13 **Mismatch**            |Number of nets: 9 **Mismatch**             
+---------------------------------------------------------------------------------------
+NET mismatches: Class fragments follow (with fanout counts):
+Circuit 1: AION_inv_nand2_nor2_1           |Circuit 2: AION_inv_nand2_nor2_1           
+
+---------------------------------------------------------------------------------------
+Net: a_181_118#                            |Net: I1_bar                                
+  sg13_lv_nmos/(1|3) = 2                   |  sg13_lv_pmos/(1|3) = 1                   
+                                           |  sg13_lv_nmos/(1|3) = 1                   
+                                           |  sg13_lv_pmos/2 = 1                       
+                                           |  sg13_lv_nmos/2 = 1                       
+                                           |                                           
+Net: a_301_118#                            |Net: O0                                    
+  sg13_lv_nmos/(1|3) = 2                   |  sg13_lv_pmos/(1|3) = 1                   
+                                           |  sg13_lv_nmos/(1|3) = 3                   
+                                           |                                           
+Net: a_48_118#                             |Net: VDD                                   
+  sg13_lv_nmos/(1|3) = 1                   |  sg13_lv_pmos/(1|3) = 2                   
+                                           |  sg13_lv_pmos/4 = 4                       
+                                           |                                           
+Net: a_421_118#                            |Net: VSS                                   
+  sg13_lv_nmos/(1|3) = 1                   |  sg13_lv_nmos/(1|3) = 4                   
+                                           |  sg13_lv_nmos/4 = 4                       
+                                           |                                           
+Net: a_48_412#                             |(no matching net)                          
+  sg13_lv_pmos/(1|3) = 1                   |                                           
+                                           |                                           
+Net: a_421_412#                            |(no matching net)                          
+  sg13_lv_pmos/(1|3) = 1                   |                                           
+                                           |                                           
+Net: sub                                   |(no matching net)                          
+  sg13_lv_nmos/4 = 3                       |                                           
+                                           |                                           
+Net: w_n48_350#                            |(no matching net)                          
+  sg13_lv_pmos/4 = 3                       |                                           
+---------------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------------
+Net: a_301_412#                            |Net: net_p_1                               
+  sg13_lv_pmos/(1|3) = 2                   |  sg13_lv_pmos/(1|3) = 2                   
+                                           |                                           
+Net: a_181_412#                            |Net: net_p_0                               
+  sg13_lv_pmos/(1|3) = 2                   |  sg13_lv_pmos/(1|3) = 2                   
+---------------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------------
+Net: a_395_82#                             |Net: I2                                    
+  sg13_lv_nmos/2 = 1                       |  sg13_lv_pmos/2 = 1                       
+  sg13_lv_pmos/2 = 1                       |  sg13_lv_nmos/2 = 1                       
+                                           |                                           
+Net: a_155_82#                             |Net: I1                                    
+  sg13_lv_nmos/2 = 1                       |  sg13_lv_pmos/2 = 1                       
+  sg13_lv_pmos/2 = 1                       |  sg13_lv_nmos/2 = 1                       
+---------------------------------------------------------------------------------------
+DEVICE mismatches: Class fragments follow (with node fanout counts):
+Circuit 1: AION_inv_nand2_nor2_1           |Circuit 2: AION_inv_nand2_nor2_1           
+
+---------------------------------------------------------------------------------------
+Instance: sg13_lv_pmos:1                   |Instance: sg13_lv_nmos:N3                  
+  (1,3) = (2,1)                            |  (1,3) = (8,4)                            
+  2 = 2                                    |  2 = 4                                    
+  4 = 3                                    |  4 = 8                                    
+                                           |                                           
+Instance: sg13_lv_pmos:5                   |Instance: sg13_lv_pmos:P3                  
+  (1,3) = (2,1)                            |  (1,3) = (4,2)                            
+  2 = 2                                    |  2 = 2                                    
+  4 = 3                                    |  4 = 6                                    
+                                           |                                           
+(no matching instance)                     |Instance: sg13_lv_pmos:P0                  
+                                           |  (1,3) = (6,4)                            
+                                           |  2 = 2                                    
+                                           |  4 = 6                                    
+                                           |                                           
+                                           |                                           
+(no matching instance)                     |Instance: sg13_lv_pmos:P1                  
+                                           |  (1,3) = (6,2)                            
+                                           |  2 = 4                                    
+                                           |  4 = 6                                    
+                                           |                                           
+---------------------------------------------------------------------------------------
+Netlists do not match.
+Port matching may fail to disambiguate symmetries.
+
+Subcircuit pins:
+Circuit 1: AION_inv_nand2_nor2_1           |Circuit 2: AION_inv_nand2_nor2_1           
+-------------------------------------------|-------------------------------------------
+(no pin, node is a_275_82#)                |I0                                         
+(no pin, node is a_155_82#)                |I1                                         
+(no pin, node is a_155_82#)                |I2                                         
+(no pin, node is w_n48_350#)               |O0                                         
+(no pin, node is w_n48_350#)               |VDD                                        
+(no pin, node is w_n48_350#)               |VSS                                        
+I0                                         |(no matching pin)                          
+I2                                         |(no matching pin)                          
+O0                                         |(no matching pin)                          
+VSS                                        |(no matching pin)                          
+VDD                                        |(no matching pin)                          
+---------------------------------------------------------------------------------------
+Cell pin lists for AION_inv_nand2_nor2_1 and AION_inv_nand2_nor2_1 altered to match.
+Device classes AION_inv_nand2_nor2_1 and AION_inv_nand2_nor2_1 are equivalent.
+
+Final result: Top level cell failed pin matching.

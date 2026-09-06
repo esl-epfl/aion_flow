@@ -9,6 +9,7 @@ __pycache__/
 build/
 out/
 logs/
+tools/aion_layout_claude/cells/
 
 # nvim/vscode stuff
 .nvim/

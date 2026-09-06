@@ -166,6 +166,8 @@ LIB_SPICE ?= $(if $(CUSTOM),$(CUSTOM),$(REPO_ROOT)/examples/aion_char/aion_nand2
 LIB_CELL  ?= $(if $(MODULE),$(MODULE),AION_nand2_11)
 LIB_NAME  ?= $(LIB_CELL)
 AREA      ?=
+AREA_LEF  ?=
+AREA_GDS  ?=
 
 CORNERS   ?= typ:mos_tt:1.20:25 slow:mos_ss:1.08:125 fast:mos_ff:1.32:-40
 SLEWS     ?= 0.0186, 0.0966, 0.174, 0.3294, 0.6408, 1.263, 2.5074
@@ -188,6 +190,8 @@ LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) $(if $(LIB),--lib $(LIB),) 
              --slews "$(SLEWS)" --loads "$(LOADS)" \
              --lib-name $(LIB_NAME) --jobs $(JOBS) \
              $(if $(AREA),--area $(AREA),) \
+             $(if $(AREA_LEF),--area-from-lef $(AREA_LEF),) \
+             $(if $(AREA_GDS),--area-from-gds $(AREA_GDS),) \
              $(if $(DRIVER),--driver-cell $(DRIVER) --driver-input $(DRIVER_IN) --driver-output $(DRIVER_OUT),) \
              $(if $(filter 0,$(VERIFY)),--no-verify,) \
              $(if $(filter 1,$(KEEP)),--keep-decks,) \

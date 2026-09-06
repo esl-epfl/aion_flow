@@ -88,6 +88,19 @@ def _split_params(tokens: List[str]) -> Dict[str, str]:
     return params
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Drop a trailing ``$`` or ``;`` comment.
+
+    Both are in-line comment markers in the common SPICE dialects, and they
+    only count when they follow whitespace so a node called ``a;b`` survives.
+    """
+    for marker in ("$", ";"):
+        index = line.find(f" {marker}")
+        if index >= 0:
+            line = line[:index]
+    return line.rstrip()
+
+
 def _preprocess(text: str) -> List[str]:
     """Strip comments, join continuations, and return logical lines."""
     logical: List[str] = []
@@ -97,6 +110,9 @@ def _preprocess(text: str) -> List[str]:
             continue
         # SPICE comments start with '*' or ';'
         if line.startswith("*") or line.startswith(";"):
+            continue
+        line = _strip_inline_comment(line)
+        if not line:
             continue
         if line.startswith("+"):
             if logical:
@@ -136,7 +152,12 @@ def _parse_x_device(tokens: List[str]) -> Union[Mosfet, SubcircuitInstance]:
 
     # The model/subcircuit name is the last token that does not contain '='.
     # Everything after it are ``key=value`` parameters.
-    model_index = max(i for i in range(1, len(tokens)) if "=" not in tokens[i])
+    plain = [i for i in range(1, len(tokens)) if "=" not in tokens[i]]
+    if not plain:
+        raise ValueError(
+            f"X-device {name!r} names no subcircuit or model: {' '.join(tokens)}"
+        )
+    model_index = max(plain)
     model_or_subckt = tokens[model_index]
     pin_tokens = tokens[1:model_index]
     params = _split_params(tokens[model_index + 1 :])
@@ -180,10 +201,25 @@ def parse_spice(text: str) -> Dict[str, Subcircuit]:
         if directive == ".subckt":
             if len(tokens) < 2:
                 raise ValueError(f"Malformed .subckt line: {line!r}")
-            current = Subcircuit(name=tokens[1], pins=tokens[2:])
+            if current is not None:
+                raise ValueError(
+                    f"Nested .subckt {tokens[1]!r} inside {current.name!r}: "
+                    f"the enclosing block is missing its .ends"
+                )
+            # Trailing ``key=value`` tokens are subcircuit parameters, not pins.
+            pins: List[str] = []
+            for token in tokens[2:]:
+                if "=" in token:
+                    break
+                pins.append(token)
+            current = Subcircuit(name=tokens[1], pins=pins)
 
         elif directive == ".ends":
             if current is not None:
+                if current.name in subckts:
+                    raise ValueError(
+                        f"Duplicate .subckt {current.name!r} in the same file"
+                    )
                 subckts[current.name] = current
                 current = None
 

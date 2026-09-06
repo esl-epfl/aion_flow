@@ -15,7 +15,7 @@ conduct on ``1`` and PMOS conduct on ``0``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from sympy import And, Not, Or, Symbol
 
@@ -70,6 +70,8 @@ class TransistorNetwork:
     output: str
     p_branches: List[List[Switch]] = field(default_factory=list)
     n_branches: List[List[Switch]] = field(default_factory=list)
+    #: ``0``/``1`` for a constant function, ``None`` for a real network.
+    constant: Optional[int] = None
 
     @property
     def pmos_count(self) -> int:
@@ -126,6 +128,11 @@ def _sum_literals(expr: object) -> List[Literal]:
 
 def generate_networks(min_forms: MinimizedForms, output: str) -> TransistorNetwork:
     """Build the dual P/N transistor network for the minimized function."""
+    if min_forms.constant is not None:
+        # A constant output has no switching network; the writer emits a tie
+        # pair whose gates are wired to the rails.
+        return TransistorNetwork(output=output, constant=min_forms.constant)
+
     n_branches: List[List[Switch]] = []
     for term in _sop_terms(min_forms.not_f_expr):
         stack = [Switch("n", lit) for lit in term]

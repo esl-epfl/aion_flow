@@ -1,0 +1,12 @@
+runs/
+docs/
+__pycache__/
+*.pyc
+*.gds
+.pytest_cache/
+
+# Run output from the agentic loop (build/, build.<tag>/).
+build/
+build.*/
+# The context/ stash orchestrate.sh leaves if it is SIGKILLed mid-call.
+.context.locked.*/

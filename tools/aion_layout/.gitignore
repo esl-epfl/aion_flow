@@ -1,6 +1,0 @@
-runs/
-docs/
-__pycache__/
-*.pyc
-*.gds
-.pytest_cache/

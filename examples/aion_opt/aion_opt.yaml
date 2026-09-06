@@ -1,14 +1,49 @@
 # Example aion_opt configuration file.
+#
 # Load it with:
 #   make aion-opt-run-all CONFIG=examples/aion_opt/aion_opt.yaml
-# or override individual values on the command line.
+# Explicit command-line values always override what is set here, and an
+# unknown key is an error rather than a silent no-op.
 
+# --- Inputs ------------------------------------------------------------------
 input_netlist: examples/aion_opt/pm32.nl.v
 cell_lib: tech/tech_dict/sg13g2_stdcell.json
 top_module: pm32
+
+# --- Mining ------------------------------------------------------------------
+# max_pattern_size          standard cells per mined pattern (2..8)
+# min_occurrences           how often a pattern must be mined to be considered
+# min_selected_occurrences  how often it must survive the non-overlapping
+#                           cover; below this the pattern is dropped and the
+#                           cover is recomputed. null = same as
+#                           min_occurrences, 1 = allow single-use cells.
+# max_outputs / max_inputs  caps on the boundary ports of a pattern; set
+#                           max_outputs to 1 for single-output cells, which is
+#                           what the downstream logic minimizer expects
+# collapse_strengths        fold sg13g2_buf_1/_4/_16 onto one generic type
+# jobs                      mining workers; 0 = every core, 1 = serial
 max_pattern_size: 3
 min_occurrences: 2
+min_selected_occurrences: null
+max_outputs: null
+max_inputs: null
 collapse_strengths: true
-allow_overlapping: false
+jobs: 0
+
+# --- Cover -------------------------------------------------------------------
+# area_factor       assumed AION cell area relative to the cells it replaces
+# allow_overlapping keep every occurrence instead of enforcing disjointness
+#                   (analysis only: the netlist cannot be rewritten from it)
 area_factor: 0.85
+allow_overlapping: false
+
+# --- Generated cell library --------------------------------------------------
+# cell_prefix   prefix of every generated module and instance
+# elite_count   size of the elite cell library; null = keep every cell
+# elite_metric  saved-area | occurrences | saved-area-per-cell
+cell_prefix: AION_
+elite_count: null
+elite_metric: saved-area
+
+# --- Outputs -----------------------------------------------------------------
 output_dir: build/aion_opt

@@ -154,7 +154,7 @@ def _link_nets(circuit: Circuit, cell_lib: CellLib | None = None) -> None:
                         # Floating / anonymous net: create one.
                         net_name = f"_auto_{bit}_"
                         net = Net(name=net_name, bits=[bit])
-                        circuit.nets[net_name] = net
+                        circuit.register_net(net)
                     if direction == "output":
                         net.drivers.append((inst.name, pin))
                     else:

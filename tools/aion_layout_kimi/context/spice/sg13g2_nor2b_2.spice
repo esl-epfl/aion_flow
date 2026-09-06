@@ -1,0 +1,30 @@
+************************************************************************
+*
+* Copyright 2023 IHP PDK Authors
+* 
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+* 
+*    https://www.apache.org/licenses/LICENSE-2.0
+* 
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*
+************************************************************************
+
+* Library name: sg13g2_stdcell
+* Cell name: sg13g2_nor2b_2
+* View name: schematic
+.subckt sg13g2_nor2b_2 Y A B_N VDD VSS
+XN0 B B_N VSS VSS sg13_lv_nmos w=640.00n l=130.00n ng=1 ad=2.176e-13 as=2.176e-13 pd=1.96e-06 ps=1.96e-06 m=1
+XN1 Y A VSS VSS sg13_lv_nmos w=1.44u l=130.00n ng=2 ad=2.736e-13 as=4.896e-13 pd=2.2e-06 ps=4.24e-06 m=1
+XN2 Y B VSS VSS sg13_lv_nmos w=1.44u l=130.00n ng=2 ad=2.736e-13 as=4.896e-13 pd=2.2e-06 ps=4.24e-06 m=1
+XP0 B B_N VDD VDD sg13_lv_pmos w=1.000u l=130.00n ng=1 ad=3.4e-13 as=3.4e-13 pd=2.68e-06 ps=2.68e-06 m=1
+XP1 net1 B VDD VDD sg13_lv_pmos w=2.24u l=130.00n ng=2 ad=4.256e-13 as=7.616e-13 pd=3e-06 ps=5.84e-06 m=1
+XP2 Y A net1 VDD sg13_lv_pmos w=2.24u l=130.00n ng=2 ad=4.256e-13 as=7.616e-13 pd=3e-06 ps=5.84e-06 m=1
+.ends
+* End of subcircuit definition.

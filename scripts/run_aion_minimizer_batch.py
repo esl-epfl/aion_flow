@@ -50,12 +50,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--wn",
         default="0.74u",
-        help="NMOS base width.",
+        help="NMOS base width (one finger; matches the SG13G2 x1 cells).",
     )
     parser.add_argument(
         "--wp",
-        default="1.48u",
-        help="PMOS base width.",
+        default="1.12u",
+        help="PMOS base width (one finger; matches the SG13G2 x1 cells).",
     )
     parser.add_argument(
         "--l",
@@ -66,8 +66,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-inputs",
         type=int,
-        default=6,
+        default=12,
         help="Maximum number of primary inputs for exhaustive verification.",
+    )
+    parser.add_argument(
+        "--skip-multi-output",
+        action="store_true",
+        help="Skip cells with more than one output. aion_minimizer handles them, "
+        "so this is only needed for downstream steps that cannot.",
     )
     parser.add_argument(
         "--verify",
@@ -113,7 +119,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def count_outputs(spice_path: Path) -> int:
-    """Count the number of .subckt primary outputs (non-VDD/VSS pins)."""
+    """Count the .subckt pins that look like outputs (non-VDD/VSS).
+
+    A name heuristic, and only used by ``--skip-multi-output``; the minimizer
+    itself works out the real directions from the netlist.
+    """
     outputs = 0
     with open(spice_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -247,7 +257,7 @@ def main() -> int:
 
     for spice_file in spice_files:
         outputs = count_outputs(spice_file)
-        if outputs != 1:
+        if args.skip_multi_output and outputs != 1:
             skipped.append(spice_file.name)
             print(
                 f"[SKIP] {spice_file.name}: {outputs} outputs (only single-output cells are minimized)"

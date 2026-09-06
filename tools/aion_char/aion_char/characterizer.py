@@ -94,10 +94,27 @@ So the minimum for a cell nobody has any other view of is::
     gen_cell_lib.py my_cell.spice --cell my_cell --inputs A,B --outputs Y \\
         --model-lib .../cornerMOSlv.lib --no-verify
 
-``--area`` and ``--footprint`` are optional metadata. ``area`` defaults to 0 and only feeds
-area reports; ``cell_footprint`` groups pin-compatible cells so a synthesis tool may swap
-one for another (with ``in_place_swap_mode : match_footprint``), which is meaningful for a
-*family* of drive strengths and pointless for a single cell.
+``--area`` and ``--footprint`` are optional metadata. ``cell_footprint`` groups
+pin-compatible cells so a synthesis tool may swap one for another (with
+``in_place_swap_mode : match_footprint``), which is meaningful for a *family* of drive
+strengths and pointless for a single cell.
+
+The Liberty ``area`` is not decoration -- a resizer and every area report act on it, and a
+``0`` there is a wrong number rather than a missing one. So besides stating it outright it
+can be *derived* from the physical view the cell already has, in this order of precedence:
+
+=========================  =============================================================
+``--area [CELL=]VALUE``    the value, stated outright
+``--area-from-lef FILE``   ``w*h`` of the ``SIZE w BY h ;`` of that cell's LEF ``MACRO``
+``--area-from-gds FILE``   the bounding box of the cell's prBoundary, GDS layer 189/4
+(none of the three)        0, as before: the cell has no physical view here
+=========================  =============================================================
+
+Both derived forms are fail-closed. A file that does not exist, names no such macro/cell, or
+carries no ``SIZE``/prBoundary is fatal and names the file; it never becomes a silent 0. The
+GDS form in particular never falls back to the bounding box of the drawn shapes: wells and
+implants deliberately overhang the boundary so abutted neighbours can share them, so that
+bbox is a different measurement and reporting it as the footprint overcharges the cell.
 
 
 Where the output goes
@@ -378,6 +395,79 @@ def _n(x: float) -> str:
 def _v(x: float) -> str:
     """A float as Liberty sees it."""
     return f"{x:.6g}"
+
+
+# --------------------------------------------------------------------------------------
+# The Liberty area, taken from a physical view
+# --------------------------------------------------------------------------------------
+#
+# Kept deliberately small and dependency-free so this package still runs on its own: a LEF
+# is read with one regex, and klayout is imported only when a GDS is actually named.
+
+#: ``MACRO <name>`` and ``SIZE <w> BY <h> ;`` inside a LEF.
+_LEF_MACRO_RE = re.compile(r"^\s*MACRO\s+(\S+)", re.MULTILINE)
+_LEF_SIZE_RE = re.compile(r"^\s*SIZE\s+([0-9.eE+-]+)\s+BY\s+([0-9.eE+-]+)\s*;", re.MULTILINE)
+
+#: GDS layer/datatype of the sg13g2 placement boundary -- the LEF ``SIZE``, drawn.
+PRBOUNDARY_LAYER = (189, 4)
+
+
+def area_from_lef(path: Path, cell: str) -> float:
+    """Area of ``cell`` in um^2, from the ``SIZE`` of its LEF ``MACRO``."""
+    if not path.is_file():
+        raise CharError(f"--area-from-lef file not found: {path}")
+    text = path.read_text(errors="replace")
+    starts = [(m.start(), m.group(1)) for m in _LEF_MACRO_RE.finditer(text)]
+    bodies = {
+        name: text[start : (starts[i + 1][0] if i + 1 < len(starts) else len(text))]
+        for i, (start, name) in enumerate(starts)
+    }
+    if cell not in bodies:
+        known = ", ".join(sorted(bodies)) or "(none)"
+        raise CharError(f"--area-from-lef {path}: no MACRO '{cell}'; it defines: {known}")
+    size = _LEF_SIZE_RE.search(bodies[cell])
+    if size is None:
+        raise CharError(
+            f"--area-from-lef {path}: MACRO '{cell}' carries no 'SIZE <w> BY <h> ;' line, "
+            "so it states no footprint"
+        )
+    w, h = float(size.group(1)), float(size.group(2))
+    if w <= 0 or h <= 0:
+        raise CharError(f"--area-from-lef {path}: MACRO '{cell}' has a degenerate SIZE {w} BY {h}")
+    return w * h
+
+
+def area_from_gds(path: Path, cell: str) -> float:
+    """Area of ``cell`` in um^2, from the bounding box of its prBoundary."""
+    if not path.is_file():
+        raise CharError(f"--area-from-gds file not found: {path}")
+    try:
+        import klayout.db as pya
+    except ImportError as exc:
+        raise CharError(
+            f"--area-from-gds {path} needs the klayout Python module, which is not "
+            f"importable here ({exc}); use --area-from-lef or --area instead"
+        ) from None
+    layout = pya.Layout()
+    try:
+        layout.read(str(path))
+    except Exception as exc:
+        raise CharError(f"--area-from-gds {path}: cannot read the GDS: {exc}") from None
+    top = layout.cell(cell)
+    if top is None:
+        known = ", ".join(sorted(c.name for c in layout.each_cell())) or "(none)"
+        raise CharError(f"--area-from-gds {path}: no cell '{cell}'; it holds: {known}")
+    index = layout.find_layer(*PRBOUNDARY_LAYER)
+    region = pya.Region(top.begin_shapes_rec(index)).merged() if index is not None else None
+    if region is None or region.is_empty():
+        raise CharError(
+            f"--area-from-gds {path}: cell '{cell}' draws no prBoundary "
+            f"({PRBOUNDARY_LAYER[0]}/{PRBOUNDARY_LAYER[1]}), so it states no placement "
+            "footprint. The bounding box of the drawn shapes is not a substitute -- wells "
+            "and implants overhang the boundary on purpose. Use --area-from-lef or --area."
+        )
+    box = region.bbox()
+    return (box.width() * layout.dbu) * (box.height() * layout.dbu)
 
 
 # --------------------------------------------------------------------------------------
@@ -2492,6 +2582,12 @@ def build_parser() -> argparse.ArgumentParser:
                     "never inside the PDK the netlist may come from)")
     ap.add_argument("--area", action="append", default=[], metavar="[CELL=]VALUE",
                     help="cell area for the Liberty 'area' attribute")
+    ap.add_argument("--area-from-lef", action="append", default=[], metavar="[CELL=]FILE",
+                    help="derive the Liberty 'area' from the SIZE of the cell's LEF MACRO; "
+                    "repeat. Used when --area does not name the cell")
+    ap.add_argument("--area-from-gds", action="append", default=[], metavar="[CELL=]FILE",
+                    help="derive the Liberty 'area' from the prBoundary (layer 189/4) of the "
+                    "cell's GDS; repeat. Used when neither --area nor --area-from-lef does")
     ap.add_argument("--footprint", action="append", default=[], metavar="[CELL=]NAME")
     ap.add_argument("--combine", choices=tuple(COMBINE), default="max",
                     help="how to combine several sensitizing side states (default: max)")
@@ -2608,8 +2704,26 @@ def main(argv: list[str] | None = None) -> int:
         return default, per
 
     area_def, area_map = parse_map(args.area, float)
+    lef_def, lef_map = parse_map(args.area_from_lef, Path)
+    gds_def, gds_map = parse_map(args.area_from_gds, Path)
     fp_def, fp_map = parse_map(args.footprint, str)
-    args.area_of = lambda n: area_map.get(n, area_def if area_def is not None else 0.0)
+
+    def area_of(name: str) -> float:
+        """The Liberty area of one cell: stated, else derived, else 0."""
+        # LEF before GDS because the LEF SIZE is what a placer will actually believe, and
+        # it is the view the boundary was exported into.
+        stated = area_map.get(name, area_def)
+        if stated is not None:
+            return stated
+        lef = lef_map.get(name, lef_def)
+        if lef is not None:
+            return area_from_lef(lef, name)
+        gds = gds_map.get(name, gds_def)
+        if gds is not None:
+            return area_from_gds(gds, name)
+        return 0.0
+
+    args.area_of = area_of
     args.footprint_of = lambda n: fp_map.get(n, fp_def or "")
 
     tmpl = Template.load(args.template, args.delay_template, args.power_template, args.energy_unit)

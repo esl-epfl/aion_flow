@@ -9,6 +9,10 @@ module {{ module_name }} ({% for port in ports %} {{ port.name }}{% if not loop.
   wire {{ wire }};
 {% endfor %}
 
+{% for assign in assigns %}
+  assign {{ assign.lhs }} = {{ assign.rhs }};
+{% endfor %}
+
 {% for inst in instances %}
   {{ inst.cell_type }} {{ inst.name }} (
 {% for conn in inst.connections %}

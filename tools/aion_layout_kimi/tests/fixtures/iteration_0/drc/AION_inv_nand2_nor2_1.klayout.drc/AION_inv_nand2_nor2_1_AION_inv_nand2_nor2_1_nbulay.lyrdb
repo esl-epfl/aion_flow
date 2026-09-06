@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <description>Main DRC Run Report at</description>
+ <original-file/>
+ <generator>drc: script='/foss/pdks/ihp-sg13g2/libs.tech/klayout/tech/drc/ihp-sg13g2.drc'</generator>
+ <top-cell>AION_inv_nand2_nor2_1</top-cell>
+ <tags>
+ </tags>
+ <categories>
+  <category>
+   <name>NBL.b</name>
+   <description>5.3.NBL.b : Min. nBuLay space or notch (same net) is 1.5 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>NBL.c</name>
+   <description>5.3.NBL.c : Min. PWell width between nBuLay regions (different net) is 3.2 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>NBL.d</name>
+   <description>5.3.NBL.d : Min. PWell width between nBuLay and NWell (different net) is 2.2 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>NBL.e</name>
+   <description>5.3.NBL.e : Min. nBuLay space to unrelated N+Activ is 1.0 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>NBL.f</name>
+   <description>5.3.NBL.f : Min. nBuLay space to unrelated P+Activ is 0.5 um</description>
+   <categories>
+   </categories>
+  </category>
+ </categories>
+ <cells>
+  <cell>
+   <name>AION_inv_nand2_nor2_1</name>
+   <variant/>
+   <layout-name/>
+   <references>
+   </references>
+  </cell>
+ </cells>
+ <items>
+ </items>
+</report-database>

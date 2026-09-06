@@ -17,28 +17,57 @@ from pathlib import Path
 
 from util import PrintSectionName, Step, Style, banner, color, run_step
 
+
+def optional(name: str, value) -> list[str]:
+    """Forward a Make variable only when it is set.
+
+    Leaving a variable out keeps the Makefile/CLI default in charge instead of
+    passing an empty value down the chain.
+    """
+    return [] if value is None else [f"{name}={value}"]
+
+
 # =============================================================================
 # Flow Variables
 # =============================================================================
 # General
-TOP = "pm32"
-INPUT_NETLIST = Path("examples/aion_opt/pm32.nl.v")
+TOP = "tt_um_aion"
+INPUT_NETLIST = Path("examples/full_flow/tt_um_aion.nl.v")
+
+# TOP = "pm32"
+# INPUT_NETLIST = Path("examples/aion_opt/pm32.nl.v")
 
 # TOP = "netlist"
 # INPUT_NETLIST = Path("examples/full_flow/netlist.v")
 
-BUILD_DIR = Path("build/full_flow")
+BUILD_DIR = Path(f"build/{TOP}_flow/")
 BUILD_DIR_STEPS = BUILD_DIR / "steps"
 REPORT_DIR = BUILD_DIR / "report"
 
 # Pattern Extraction
+# MAX_SIZE        cells per mined pattern
+# MIN_OCCURRENCES times a pattern must be mined to be kept
+# MIN_SELECTED    times it must survive the non-overlapping cover (1 disables)
+# MAX_OUTPUTS     boundary outputs per pattern (None = no limit)
+# MAX_INPUTS      boundary inputs per pattern (None = no limit)
+# JOBS            mining workers (None = every core)
+# CELL_PREFIX     prefix of every generated module
+# ELITE_COUNT     size of the elite cell library (None = keep every cell)
 MAX_SIZE = 3
 MIN_OCCURRENCES = 2
+MIN_SELECTED = None
 AREA_FACTOR = 0.85
 MAX_OUTPUTS = 1
+MAX_INPUTS = None
+JOBS = None
+CELL_PREFIX = "AION_"
+ELITE_COUNT = 20
+ELITE_METRIC = "saved-area"
 
 AION_CELLS = BUILD_DIR / "aion_cells.v"
+ELITE_CELLS = BUILD_DIR / "aion_cells_elite.v"
 OPTIMIZED_NETLIST = BUILD_DIR / "aion_netlist.v"
+SELECTION = BUILD_DIR_STEPS / "aion_opt" / "work" / "selection.json"
 
 # Characterization
 LIB_DIR = BUILD_DIR / "lib"
@@ -59,7 +88,8 @@ MINIMIZER_VERIFY_SPICE = True
 # Flow definition
 # =============================================================================
 
-FLOW = [
+# The complete pipeline, kept here as the reference definition.
+FLOW_FULL = [
     PrintSectionName("Pattern Extraction"),
     Step(
         "Extract AION Cells",
@@ -67,10 +97,19 @@ FLOW = [
         [
             f"INPUT={INPUT_NETLIST}",
             f"TOP={TOP}",
+            f"MAX_SIZE={MAX_SIZE}",
             f"MIN_OCCURRENCES={MIN_OCCURRENCES}",
             f"AREA_FACTOR={AREA_FACTOR}",
-            f"MAX_OUTPUTS={MAX_OUTPUTS}",
+            f"CELL_PREFIX={CELL_PREFIX}",
+            f"ELITE_METRIC={ELITE_METRIC}",
+            *optional("MIN_SELECTED", MIN_SELECTED),
+            *optional("MAX_OUTPUTS", MAX_OUTPUTS),
+            *optional("MAX_INPUTS", MAX_INPUTS),
+            *optional("JOBS", JOBS),
+            *optional("ELITE_COUNT", ELITE_COUNT),
             f"CELLS={AION_CELLS}",
+            f"ELITE_CELLS={ELITE_CELLS}",
+            f"SELECTION={SELECTION}",
             f"BUILD_DIR={BUILD_DIR_STEPS}",
             f"PATTERN_REPORT={REPORT_DIR / 'pattern_report.json'}",
         ],
@@ -85,7 +124,15 @@ FLOW = [
             f"BUILD_DIR={BUILD_DIR_STEPS}",
             f"REWRITE_NETLIST={OPTIMIZED_NETLIST}",
             f"REWRITE_REPORT={REPORT_DIR / 'extraction_report'}",
-            f"MAX_OUTPUTS={MAX_OUTPUTS}",
+            f"MAX_SIZE={MAX_SIZE}",
+            f"MIN_OCCURRENCES={MIN_OCCURRENCES}",
+            f"AREA_FACTOR={AREA_FACTOR}",
+            f"CELL_PREFIX={CELL_PREFIX}",
+            *optional("MIN_SELECTED", MIN_SELECTED),
+            *optional("MAX_OUTPUTS", MAX_OUTPUTS),
+            *optional("MAX_INPUTS", MAX_INPUTS),
+            *optional("JOBS", JOBS),
+            f"SELECTION={SELECTION}",
         ],
     ),
     Step(
@@ -168,6 +215,64 @@ FLOW = [
     # ),
 ]
 
+
+# Active flow: pattern extraction only, stopping at the LEC gate.
+FLOW = [
+    PrintSectionName("Pattern Extraction"),
+    Step(
+        "Extract AION Cells",
+        "aion-opt-generate-cells",
+        [
+            f"INPUT={INPUT_NETLIST}",
+            f"TOP={TOP}",
+            f"MAX_SIZE={MAX_SIZE}",
+            f"MIN_OCCURRENCES={MIN_OCCURRENCES}",
+            f"AREA_FACTOR={AREA_FACTOR}",
+            f"CELL_PREFIX={CELL_PREFIX}",
+            f"ELITE_METRIC={ELITE_METRIC}",
+            *optional("MIN_SELECTED", MIN_SELECTED),
+            *optional("MAX_OUTPUTS", MAX_OUTPUTS),
+            *optional("MAX_INPUTS", MAX_INPUTS),
+            *optional("JOBS", JOBS),
+            *optional("ELITE_COUNT", ELITE_COUNT),
+            f"CELLS={AION_CELLS}",
+            f"ELITE_CELLS={ELITE_CELLS}",
+            f"SELECTION={SELECTION}",
+            f"BUILD_DIR={BUILD_DIR_STEPS}",
+            f"PATTERN_REPORT={REPORT_DIR / 'pattern_report.json'}",
+        ],
+    ),
+    Step(
+        "Rewrite Netlist",
+        "aion-opt-rewrite",
+        [
+            f"INPUT={INPUT_NETLIST}",
+            f"TOP={TOP}",
+            f"CELLS={AION_CELLS}",
+            f"BUILD_DIR={BUILD_DIR_STEPS}",
+            f"REWRITE_NETLIST={OPTIMIZED_NETLIST}",
+            f"REWRITE_REPORT={REPORT_DIR / 'extraction_report'}",
+            f"MAX_SIZE={MAX_SIZE}",
+            f"MIN_OCCURRENCES={MIN_OCCURRENCES}",
+            f"AREA_FACTOR={AREA_FACTOR}",
+            f"CELL_PREFIX={CELL_PREFIX}",
+            *optional("MIN_SELECTED", MIN_SELECTED),
+            *optional("MAX_OUTPUTS", MAX_OUTPUTS),
+            *optional("MAX_INPUTS", MAX_INPUTS),
+            *optional("JOBS", JOBS),
+            f"SELECTION={SELECTION}",
+        ],
+    ),
+    Step(
+        "Run LEC",
+        "aion-opt-lec",
+        [
+            f"REF={INPUT_NETLIST}",
+            f"MOD={OPTIMIZED_NETLIST} {AION_CELLS}",
+            f"BUILD_DIR={BUILD_DIR_STEPS}",
+        ],
+    ),
+]
 
 # =============================================================================
 # Runner

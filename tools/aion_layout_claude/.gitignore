@@ -1,0 +1,6 @@
+# Run output.  Everything under build/ is regenerable by `make flow`.
+build/
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

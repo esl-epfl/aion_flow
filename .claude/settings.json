@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/tools/aion_layout_claude/scripts/hook_cell_check.py\"",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
+  }
+}

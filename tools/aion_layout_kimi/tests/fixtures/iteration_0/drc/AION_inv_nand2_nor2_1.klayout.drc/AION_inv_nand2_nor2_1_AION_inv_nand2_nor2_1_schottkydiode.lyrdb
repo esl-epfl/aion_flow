@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <description>Main DRC Run Report at</description>
+ <original-file/>
+ <generator>drc: script='/foss/pdks/ihp-sg13g2/libs.tech/klayout/tech/drc/ihp-sg13g2.drc'</generator>
+ <top-cell>AION_inv_nand2_nor2_1</top-cell>
+ <tags>
+ </tags>
+ <categories>
+  <category>
+   <name>Sdiod.b</name>
+   <description>6.7. Sdiod.b : Min. and max. nSD:block enclosure of ContBar = 0.4 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>Sdiod.c</name>
+   <description>6.7. Sdiod.c : Min. and max. SalBlock enclosure of ContBar = 0.45 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>Sdiod.d</name>
+   <description>6.7. Sdiod.d : Min. and max. ContBar width inside nBuLay is 0.3 um</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>Sdiod.e</name>
+   <description>6.7. Sdiod.e : Min. and max. ContBar length inside nBuLay is 1.0 um</description>
+   <categories>
+   </categories>
+  </category>
+ </categories>
+ <cells>
+  <cell>
+   <name>AION_inv_nand2_nor2_1</name>
+   <variant/>
+   <layout-name/>
+   <references>
+   </references>
+  </cell>
+ </cells>
+ <items>
+ </items>
+</report-database>

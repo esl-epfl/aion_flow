@@ -11,6 +11,7 @@ include scripts/utils.mk
 REPO_ROOT := $(realpath .)
 
 .PHONY: aion-opt-graph2verilog aion-opt-generate-cells aion-opt-rewrite \
+        aion-opt-select-elite aion-opt-test aion-opt-complement-plan \
         aion-opt-run-all aion-opt-lec aion-opt-sec aion-opt-clean \
         aion-char-generate aion-char-verilator aion-char-icarus aion-char-sv \
         aion-char-spice aion-char-all aion-char-plot aion-char-wave-sv \
@@ -18,9 +19,15 @@ REPO_ROOT := $(realpath .)
         aion-char-lib-template aion-char-cells aion-char-verify-spice \
         aion-char-clean aion-char-clean-tb aion-char-clean-lib \
         aion-char-clean-build \
+        aion-layout-resize aion-layout-scaffold aion-layout-gds aion-layout-png aion-layout-drc \
+        aion-layout-lvs aion-layout-verify aion-layout-pex aion-layout-evidence \
+        aion-layout-baseline aion-layout-characterize aion-layout-compare \
+        aion-layout-export aion-layout-flow aion-layout-test aion-layout-clean \
         split-spice-cells merge-spice-cells run-aion-minimizer-batch \
         aion-minimizer-run aion-minimizer-verify-spice aion-minimizer-clean \
-        clean clean_aion_opt clean_aion_char clean_aion_minimizer
+        aion-minimizer-test \
+        clean clean_aion_opt clean_aion_char clean_aion_minimizer \
+        flow flow-opt
 
 # ---------------------------------------------------------------------------
 # Directories
@@ -72,20 +79,55 @@ AION_CHAR_NETLIST_FINAL_DOCKER := $(if $(filter 1,$(AION_IN_DOCKER)),$(AION_CHAR
 # ---------------------------------------------------------------------------
 # Mining parameters
 # ---------------------------------------------------------------------------
+# MAX_SIZE        maximum number of standard cells per mined pattern
+# MIN_OCCURRENCES minimum mined occurrences for a pattern to be kept
+# MIN_SELECTED    minimum occurrences a pattern must still have after the
+#                 non-overlapping cover (empty = same as MIN_OCCURRENCES,
+#                 1 = keep single-use cells)
+# MAX_OUTPUTS     cap on boundary outputs per pattern (empty = no limit)
+# MAX_INPUTS      cap on boundary inputs per pattern (empty = no limit)
+# AREA_FACTOR     assumed AION cell area relative to the cells it replaces
+# JOBS            mining worker processes (empty = every available core)
 MAX_SIZE          ?= 3
 MIN_OCCURRENCES   ?= 2
+MIN_SELECTED      ?=
 AREA_FACTOR       ?= 0.85
-MAX_OUTPUTS       ?= 
+MAX_OUTPUTS       ?=
+MAX_INPUTS        ?=
+JOBS              ?=
+# COLLAPSE_STRENGTHS  1 (default) folds sg13g2_buf_1/_4/_16 onto one generic
+#                     type; 0 treats every drive strength as its own cell
+# ALLOW_OVERLAPPING   1 keeps every occurrence instead of a disjoint cover.
+#                     Analysis only - generate-cells accepts it, rewrite does not.
+COLLAPSE_STRENGTHS ?= 1
+ALLOW_OVERLAPPING ?=
+
+# ---------------------------------------------------------------------------
+# Generated cell library
+# ---------------------------------------------------------------------------
+# CELL_PREFIX     prefix of every generated module (AION_ -> AION_nand2_nor2_0)
+# ELITE_COUNT     size of the elite cell library (empty/0 = keep every cell)
+# ELITE_METRIC    saved-area | occurrences | saved-area-per-cell
+CELL_PREFIX       ?= AION_
+ELITE_COUNT       ?=
+ELITE_METRIC      ?= saved-area
 
 # ---------------------------------------------------------------------------
 # Output paths (per command)
 # ---------------------------------------------------------------------------
 GRAPH2V_OUTPUT    ?= $(BUILD_DIR_OPT)/$(TOP)_graph2verilog.v
 CELLS             ?= $(BUILD_DIR_OPT)/aion_cells.v
+ELITE_CELLS       ?= $(BUILD_DIR_OPT)/aion_cells_elite.v
 PATTERN_REPORT    ?= $(BUILD_DIR_OPT)/pattern_report.json
 REWRITE_NETLIST   ?= $(BUILD_DIR_OPT)/$(TOP)_optimized.v
+REWRITE_FLAT      ?=
 REWRITE_REPORT    ?= $(BUILD_DIR_OPT)/report
 RUN_ALL_FLAT      ?= $(BUILD_DIR_OPT)/$(TOP)_optimized_flat.v
+# Mining result shared between generate-cells and rewrite so the netlist is
+# only mined once per flow.
+SELECTION         ?= $(BUILD_DIR_OPT)/work/selection.json
+COMPLEMENT_PLAN   ?= $(BUILD_DIR_OPT)/complement_plan.json
+CELL_INTERFACES   ?= $(BUILD_DIR_MIN)/reports
 
 # ---------------------------------------------------------------------------
 # Config file support
@@ -113,6 +155,22 @@ aion-opt-graph2verilog: ## Convert input netlist to structural Verilog
 		--work-dir $(BUILD_DIR_OPT)/work \
 		--output $(GRAPH2V_OUTPUT)
 
+# Mining/cover knobs shared by generate-cells, rewrite and run-all. Optional
+# variables are only forwarded when set, so the CLI defaults stay in charge.
+AION_OPT_MINE_ARGS := \
+	--max-size $(MAX_SIZE) \
+	--min-occurrences $(MIN_OCCURRENCES) \
+	--area-factor $(AREA_FACTOR) \
+	$(if $(MIN_SELECTED),--min-selected $(MIN_SELECTED)) \
+	$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS)) \
+	$(if $(MAX_INPUTS),--max-inputs $(MAX_INPUTS)) \
+	$(if $(JOBS),--jobs $(JOBS)) \
+	$(if $(filter 0,$(COLLAPSE_STRENGTHS)),--no-collapse-strengths)
+
+AION_OPT_ELITE_ARGS := \
+	$(if $(ELITE_COUNT),--elite-count $(ELITE_COUNT)) \
+	$(if $(ELITE_METRIC),--elite-metric $(ELITE_METRIC))
+
 aion-opt-generate-cells: ## Mine patterns and generate AION cells
 	@mkdir -p $(BUILD_DIR_OPT)/work
 	PYTHONPATH=$(PYTHONPATH) $(AION_OPT) generate-cells \
@@ -120,12 +178,36 @@ aion-opt-generate-cells: ## Mine patterns and generate AION cells
 		--cell-lib $(CELL_LIB) \
 		--top $(TOP) \
 		--work-dir $(BUILD_DIR_OPT)/work \
-		--max-size $(MAX_SIZE) \
-		--min-occurrences $(MIN_OCCURRENCES) \
-		--area-factor $(AREA_FACTOR) \
-		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS)) \
+		--cell-prefix $(CELL_PREFIX) \
+		$(AION_OPT_MINE_ARGS) \
+		$(if $(ALLOW_OVERLAPPING),--allow-overlapping) \
+		$(AION_OPT_ELITE_ARGS) \
 		--output-cells $(CELLS) \
-		--output-report $(PATTERN_REPORT)
+		$(if $(ELITE_CELLS),--output-elite-cells $(ELITE_CELLS)) \
+		--output-report $(PATTERN_REPORT) \
+		$(if $(SELECTION),--selection $(SELECTION)) \
+		$(if $(wildcard $(COMPLEMENT_PLAN)),--complement-plan $(COMPLEMENT_PLAN))
+
+aion-opt-complement-plan: ## Decide which complemented cell inputs come from outside the cell
+	@mkdir -p $(dir $(COMPLEMENT_PLAN))
+	PYTHONPATH=$(PYTHONPATH) $(AION_OPT) complement-plan \
+		--input $(INPUT) \
+		--cell-lib $(CELL_LIB) \
+		--top $(TOP) \
+		--work-dir $(BUILD_DIR_OPT)/work \
+		--cell-prefix $(CELL_PREFIX) \
+		$(AION_OPT_MINE_ARGS) \
+		--cells $(CELLS) \
+		$(if $(wildcard $(CELL_INTERFACES)),--interfaces $(CELL_INTERFACES)) \
+		--output-plan $(COMPLEMENT_PLAN) \
+		$(if $(SELECTION),--selection $(SELECTION))
+
+aion-opt-select-elite: ## Cut an existing cell library down to ELITE_COUNT cells
+	PYTHONPATH=$(PYTHONPATH) $(AION_OPT) select-elite \
+		--cells $(CELLS) \
+		--pattern-report $(PATTERN_REPORT) \
+		$(AION_OPT_ELITE_ARGS) \
+		--output-cells $(ELITE_CELLS)
 
 aion-opt-rewrite: ## Rewrite netlist with generated cells
 	@mkdir -p $(BUILD_DIR_OPT)/work
@@ -134,13 +216,13 @@ aion-opt-rewrite: ## Rewrite netlist with generated cells
 		--cell-lib $(CELL_LIB) \
 		--top $(TOP) \
 		--work-dir $(BUILD_DIR_OPT)/work \
+		--cell-prefix $(CELL_PREFIX) \
+		$(AION_OPT_MINE_ARGS) \
 		--cells $(CELLS) \
 		--output-netlist $(REWRITE_NETLIST) \
+		$(if $(REWRITE_FLAT),--output-flat-netlist $(REWRITE_FLAT)) \
 		--output-report $(REWRITE_REPORT) \
-		--max-size $(MAX_SIZE) \
-		--min-occurrences $(MIN_OCCURRENCES) \
-		--area-factor $(AREA_FACTOR) \
-		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS))
+		$(if $(SELECTION),--selection $(SELECTION))
 
 aion-opt-run-all: ## Run the full aion_opt flow end-to-end
 	@mkdir -p $(BUILD_DIR_OPT)/work
@@ -155,12 +237,14 @@ else
 		--cell-lib $(CELL_LIB) \
 		--top $(TOP) \
 		--output-dir $(BUILD_DIR_OPT) \
-		--max-size $(MAX_SIZE) \
-		--min-occurrences $(MIN_OCCURRENCES) \
-		--area-factor $(AREA_FACTOR) \
-		$(if $(MAX_OUTPUTS),--max-outputs $(MAX_OUTPUTS)) \
+		--cell-prefix $(CELL_PREFIX) \
+		$(AION_OPT_MINE_ARGS) \
+		$(AION_OPT_ELITE_ARGS) \
 		--rtl $(RTL)
 endif
+
+aion-opt-test: ## Run the aion_opt unit + end-to-end test suite
+	PYTHONPATH=$(PYTHONPATH) python3 -m pytest $(AION_OPT_DIR)/tests -q
 
 # ---------------------------------------------------------------------------
 # Verification
@@ -207,6 +291,8 @@ AION_CHAR_VARS := \
 	$(if $(SLEWS),SLEWS="$(SLEWS)") \
 	$(if $(LOADS),LOADS="$(LOADS)") \
 	$(if $(JOBS),JOBS=$(JOBS)) \
+	$(if $(RESIZED),RESIZED=$(RESIZED)) \
+	$(if $(MIN_DEPTH),MIN_DEPTH=$(MIN_DEPTH)) \
 	$(if $(AREA),AREA=$(AREA)) \
 	$(if $(DRIVER),DRIVER=$(DRIVER)) \
 	$(if $(DRIVER_IN),DRIVER_IN=$(DRIVER_IN)) \
@@ -276,6 +362,78 @@ aion-char-verify-spice: ## Verify a custom SPICE netlist for CELL (CELL=..., SPI
 		MODULE=$(CELL) CUSTOM=$(subst $(REPO_ROOT),/foss/designs/aion_flow,$(abspath $(SPICE)))$(AION_CHAR_DOCKER_SUFFIX)
 
 # ---------------------------------------------------------------------------
+# aion_layout — standard-cell layout, verification, characterization, export
+#
+# The tool owns its own container calls, so unlike aion_char these targets are
+# NOT wrapped in the docker runner: they run on the host and the tool decides
+# per step whether that step belongs in the container.
+# ---------------------------------------------------------------------------
+AION_LAYOUT_DIR := tools/aion_layout_claude
+
+# Every variable the sub-Makefile understands, forwarded only when set, so the
+# sub-Makefile's own defaults (the worked example) keep working with no argument.
+# NOTE: this Makefile's own NETLIST already means the aion_opt input netlist and
+# is defaulted, so forwarding it here would silently hand the layout tool a
+# post-synthesis Verilog file.  The layout netlist has its own name.
+AION_LAYOUT_VARS = \
+	$(if $(CELL),CELL=$(CELL)) \
+	$(if $(CELL_MODULE),CELL_MODULE=$(CELL_MODULE)) \
+	$(if $(LAYOUT_NETLIST),NETLIST=$(LAYOUT_NETLIST)) \
+	$(if $(BASELINE),BASELINE=$(BASELINE)) \
+	$(if $(BUILD_DIR_LAYOUT),BUILD_DIR=$(BUILD_DIR_LAYOUT)) \
+	$(if $(FINAL_DIR),FINAL_DIR=$(FINAL_DIR)) \
+	$(if $(CORNERS),CORNERS="$(CORNERS)") \
+	$(if $(JOBS),JOBS=$(JOBS))
+
+aion-layout-resize: ## Widen a netlist's series stacks into a new, area-capped cell
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) resize $(AION_LAYOUT_VARS)
+
+aion-layout-scaffold: ## Scaffold a cell generator from a SPICE netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) scaffold $(AION_LAYOUT_VARS)
+
+aion-layout-gds: ## Build the GDS from the cell generator
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) gds $(AION_LAYOUT_VARS)
+
+aion-layout-png: ## Render the layout to a PNG
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) png $(AION_LAYOUT_VARS)
+
+aion-layout-drc: ## Run Magic + KLayout DRC on the cell
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) drc $(AION_LAYOUT_VARS)
+
+aion-layout-lvs: ## Run Magic + Netgen LVS against the netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) lvs $(AION_LAYOUT_VARS)
+
+aion-layout-verify: ## Build + DRC + LVS, print one RESULT: line
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) verify $(AION_LAYOUT_VARS)
+
+aion-layout-pex: ## Extract the full-RC parasitic netlist with Magic
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) pex $(AION_LAYOUT_VARS)
+
+aion-layout-evidence: ## Print the evidence packet for the current layout
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) evidence $(AION_LAYOUT_VARS)
+
+aion-layout-baseline: ## Build and verify the abutted PDK-cell reference layout
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) baseline $(AION_LAYOUT_VARS)
+
+aion-layout-characterize: ## Characterize the cell into Liberty .lib files from the PEX netlist
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) characterize $(AION_LAYOUT_VARS)
+
+aion-layout-compare: ## Compare the cell against the abutted baseline on area and delay
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) compare $(AION_LAYOUT_VARS)
+
+aion-layout-export: ## Export gds/lef/lib/v/spice/cdl views
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) export $(AION_LAYOUT_VARS)
+
+aion-layout-flow: ## Run the whole mechanical chain: verify, pex, baseline, characterize, compare, export
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) flow $(AION_LAYOUT_VARS)
+
+aion-layout-test: ## Run the aion_layout host-side test suite
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) test
+
+aion-layout-clean: ## Remove aion_layout build outputs
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) clean $(AION_LAYOUT_VARS)
+
+# ---------------------------------------------------------------------------
 # SPICE split / merge helper
 # ---------------------------------------------------------------------------
 SPLIT_MERGE_SCRIPT := scripts/spice_split_merge.py
@@ -332,6 +490,9 @@ endif
 		CELL=$(CELL) \
 		SPICE=$(SPICE)
 
+aion-minimizer-test: ## Run the aion_minimizer test suite
+	PYTHONPATH=$(PYTHONPATH) python3 -m pytest $(AION_MIN_DIR)/tests -q
+
 aion-minimizer-clean: ## Remove aion_minimizer build outputs
 	rm -rf $(BUILD_DIR_MIN)
 
@@ -370,3 +531,6 @@ clean_aion_minimizer: ## Alias for aion-minimizer-clean
 
 flow: ## Run the full flow
 	python examples/full_flow/flow.py
+
+flow-opt: ## Run the optimization-only flow (mine -> elite -> rewrite -> LEC)
+	python examples/full_flow/flow_opt.py

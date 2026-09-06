@@ -1,0 +1,17 @@
+This submodule is a toolbox, not part of aion_chip's FuseSoC library.
+
+aion_chip/fusesoc.conf declares `[library.aion] location = .`, which walks the
+whole project. Without this marker FuseSoC also picks up aion_flow/tech/tech.core,
+which declares the same VLNV as aion_chip/tech/tech.core -- epfl:aion:tech:1.0.0 --
+but points at the *timing* cell models. The submodule wins the tie by walk order,
+so every gate-level simulation silently elaborates with the wrong models:
+
+    WARNING: Replacing epfl:aion:tech:1.0.0 in <aion_chip>/tech
+             with the version found in <aion_chip>/aion_flow/tech
+
+Verilator then gets the primitive/table UDPs instead of the zero-delay
+behavioural replacements and the run hangs at 0 ns.
+
+FuseSoC skips any directory tree containing a file with this name
+(fusesoc/coremanager.py: find_cores -> `ignore_tree = "FUSESOC_IGNORE" in files`).
+aion_flow's own cores are still usable from inside aion_flow.

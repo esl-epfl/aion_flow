@@ -42,13 +42,14 @@ def lef_text(
     width=2.88,
     height=3.78,
     pins=("I0", "I1", "I2", "O0", "VDD", "VSS"),
-    pin_rect=(0.200, 0.340, 0.360, 0.500),
+    pin_rect=(0.200, 0.310, 0.490, 0.530),
 ):
     """A LEF macro with one knob per requirement, so each can be broken alone.
 
     ``pin_rect`` defaults to a Metal1 port straddling y = 0.42 um, the first
-    Metal1 track: a port that misses the track grid is a rejection, so the
-    passing fixture has to sit on one.
+    Metal1 track, and 0.29 x 0.22 um across: a port that misses the track grid
+    is a rejection and so is one too small for a via to land on, so the passing
+    fixture has to clear both.
     """
     lines = ["VERSION 5.7 ;", "BUSBITCHARS \"[]\" ;", "", f"MACRO {cell}"]
     if cell_class is not None:

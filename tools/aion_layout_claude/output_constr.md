@@ -39,6 +39,7 @@ because none of them fail until detailed placement otherwise:
 - width an exact multiple of `0.48` um (the `CoreSite` pitch)
 - `PIN VDD` and `PIN VSS` present, so the PDN can strap it
 - **every signal pin covers a routing track** — see below
+- **every signal pin has room for a via to land on it** — see below
 
 ## Every signal pin must cover a routing track
 
@@ -87,6 +88,53 @@ Cells are cheaper to check than to re-route: `make export` grades this and
 refuses to publish, and `make pnr` refuses to start. All 283 signal pins of
 the PDK `sg13g2_stdcell` library satisfy it.
 
-Note that this is a *necessary* condition, not a sufficient one — a port can
-cover a track and still be unroutable once the neighbours' obstructions are
-in play. It is the half that can be checked from the abstract alone.
+## Covering a track is not enough: the via has to land
+
+Growing a port until it just touches a track is how the second pass failed.
+`AION_a21oi_nor2_1`'s `O0` came back as `RECT 2.150 1.090 2.550 1.270` — it
+does contain the track at `y = 1.260`, and detailed routing still aborted with
+`DRT-0073` on every instance of the cell. A wire that runs onto a port still
+has to get *down* to it, and 0.18 um leaves nowhere to put the via.
+
+Every `ViaN` (N = 1..4) in `sg13g2_tech.lef` is a 0.19 um cut enclosed by
+**0.29 x 0.21 um on the metal below**, in either orientation. The long side
+lies along the wire and may hang off the end of the port onto the rest of the
+net — `sg13g2_nand4_1`'s `A` relies on that, its widest port `RECT` being
+0.275 um. The short side may not. So:
+
+> a port `RECT` must be at least **0.21 um across in both directions**.
+
+That is 0.05 um more than the `Metal1` minimum width, so a port drawn at
+minimum width is never enough on its own — it has to be widened where the via
+goes, which is what the PDK cells do (`sg13g2_inv_1`'s `Y` is 0.23 um across
+and 2.565 um long, crossing six tracks).
+
+## Label the whole net, not just the contact
+
+`make export` runs `lef write -hide -pinonly`, which writes **only labelled
+geometry as a `PORT` and everything else as `OBS`** — including the rest of
+the port's own net. `AION_nand2_o21ai_0` failed on that: it routes `O0` up to
+`Metal2` correctly, but only the `Metal1` end carries a label, so the strap
+came out as
+
+```
+OBS
+  LAYER Metal2 ;
+    RECT 1.835 0.950 2.035 2.650 ;   <- sits exactly on top of PIN O0
+```
+
+and the router had a legal-looking `Metal1` port with an obstruction parked
+where its via would have gone. Label every shape of a port's net, on every
+layer it reaches, and the strap becomes access instead of a blockage.
+
+## What is checked, and where
+
+`make verify` grades the ports a generator declares, so a cell can be fixed
+inside the drawing loop; `make export` grades the LEF magic actually wrote and
+refuses to publish; `make pnr` refuses to start. All 283 signal pins of the
+PDK `sg13g2_stdcell` library pass all of it.
+
+These are *necessary* conditions, not sufficient ones — a port can satisfy
+every one of them and still be unroutable once the neighbouring instances'
+obstructions are in play. They are the half that can be checked from the
+abstract alone, and the half that has actually taken this flow down.

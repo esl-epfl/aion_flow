@@ -126,7 +126,9 @@ V1_YB = (1010, 1200)
 V1_YT = (2400, 2590)
 M2_X = (V1_X - 100, V1_X + 100)  # 200 nm wide, 5 nm side enclosure
 M2_Y = (950, 2650)               # 50 nm endcap enclosure at both ends
-M1_LAND_YB = (960, 1250)         # 290 nm tall Metal1 landing (50 nm endcap)
+# The O0 landing is stretched up to 1270 so the port covers the y = 1260 nm
+# Metal1 routing track; 1450 - 1270 = 180 nm keeps M1.b to the gate pads.
+M1_LAND_YB = (960, 1270)         # Metal1 landing (>= 50 nm Via1 endcap)
 M1_LAND_YT = (2310, 2660)
 
 # --------------------------------------------------------------- netlist ---

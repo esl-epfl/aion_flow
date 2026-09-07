@@ -52,10 +52,11 @@ ROW_LEGAL = CellGeometry(
 )
 
 #: Ports a router can land on: Metal1 is horizontal, so each spans a
-#: y = n * 420 nm track.  ``(name, layer, x1, y1, x2, y2)`` in nm.
+#: y = n * 420 nm track, and each is over 210 nm across so a via has somewhere
+#: to sit.  ``(name, layer, x1, y1, x2, y2)`` in nm.
 ON_TRACK_PORTS = [
-    ("I0", "Metal1", 200.0, 340.0, 360.0, 500.0),      # crosses y = 420
-    ("O0", "Metal1", 2150.0, 1600.0, 2550.0, 1760.0),  # crosses y = 1680
+    ("I0", "Metal1", 200.0, 310.0, 490.0, 530.0),      # crosses y = 420
+    ("O0", "Metal1", 2150.0, 1570.0, 2550.0, 1790.0),  # crosses y = 1680
 ]
 
 

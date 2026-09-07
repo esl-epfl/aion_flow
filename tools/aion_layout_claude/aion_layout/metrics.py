@@ -65,6 +65,34 @@ ROUTING_AXIS = {
 #: it, which is what magic writes.
 POWER_PIN_NAMES = frozenset({"VDD", "VSS"})
 
+#: Via landing pads, from the ``DEFAULT`` via definitions in
+#: ``sg13g2_tech.lef``.  Every ``ViaN`` (N = 1..4) is a 0.19 um cut enclosed by
+#: 0.29 x 0.21 um on the metal below and 0.29 x 0.20 um on the metal above, in
+#: either orientation.  Covering a track is only half of it: a wire that runs
+#: onto a port still has to get down to it, and a port with nowhere to put that
+#: pad is ``DRT-0073`` just the same.
+#:
+#: The long side of the pad lies along the wire and may hang off the end of the
+#: port onto the rest of the net -- ``sg13g2_nand4_1/A`` relies on exactly
+#: that, its widest port RECT being 0.275 um against a 0.29 um pad.  The short
+#: side may not, so 0.21 um across is the floor.
+#: ``(axis of the long side, pad below w, h, pad above w, h)`` in um.
+VIA_LANDING = (
+    ("x", 0.29, 0.21, 0.29, 0.20),
+    ("y", 0.21, 0.29, 0.20, 0.29),
+)
+VIA_LANDING_SHORT_SIDE_UM = 0.21
+
+#: The layer a via off a port lands on, so that the macro's own obstructions
+#: there can be checked for sitting on top of it.  Metal5 is absent on purpose:
+#: TopVia1 is a different animal and no cell pin is drawn that high.
+LAYER_ABOVE = {
+    "Metal1": "Metal2",
+    "Metal2": "Metal3",
+    "Metal3": "Metal4",
+    "Metal4": "Metal5",
+}
+
 
 class MetricsError(RuntimeError):
     """Raised when a measurement cannot be taken from the artifact given."""
@@ -306,6 +334,12 @@ _LEF_RECT_RE = re.compile(
 )
 _LEF_USE_RE = re.compile(r"^\s*USE\s+(\S+)\s*;", re.MULTILINE)
 _LEF_POLYGON_RE = re.compile(r"^\s*POLYGON\b", re.MULTILINE)
+#: The ``OBS`` block of a macro.  It runs to the first bare ``END``; ``END
+#: <macro>`` carries a token after it and cannot close it by accident.
+_LEF_OBS_RE = re.compile(
+    r"^[ \t]*OBS[ \t]*$(.*?)^[ \t]*END[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def _covers_track(lo_um: float, hi_um: float, axis: str) -> bool:
@@ -314,6 +348,91 @@ def _covers_track(lo_um: float, hi_um: float, axis: str) -> bool:
     # First track at or above lo, then ask whether it is still inside.
     n = math.ceil((lo_um - offset) / pitch - GRID_TOL_UM / pitch)
     return offset + n * pitch <= hi_um + GRID_TOL_UM
+
+
+def _layer_rects(block: str) -> List[Tuple[str, float, float, float, float]]:
+    """Every RECT of a ``PORT`` or ``OBS`` block, as ``(layer, x1, y1, x2, y2)``."""
+    rects: List[Tuple[str, float, float, float, float]] = []
+    layer: Optional[str] = None
+    for line in block.splitlines():
+        layer_match = _LEF_LAYER_RE.match(line)
+        if layer_match is not None:
+            layer = layer_match.group(1)
+            continue
+        rect_match = _LEF_RECT_RE.match(line)
+        if rect_match is None or layer is None:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in rect_match.groups())
+        rects.append((layer, min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+    return rects
+
+
+def _centre_span(lo: float, hi: float, pad: float, may_spill: bool):
+    """Where a pad of size ``pad`` may be centred within ``[lo, hi]``, or None.
+
+    A pad that does not fit still lands when it is its long side that runs
+    over, because it runs over onto the rest of the net -- but only as far as
+    the short side, past which there is no port left to sit on.
+    """
+    if hi - lo >= pad - GRID_TOL_UM:
+        return lo + pad / 2, hi - pad / 2
+    if may_spill and hi - lo >= VIA_LANDING_SHORT_SIDE_UM - GRID_TOL_UM:
+        centre = (lo + hi) / 2
+        return centre, centre
+    return None
+
+
+def _region_covered(box, blockers) -> bool:
+    """True when every point of the closed rectangle ``box`` lies in a blocker.
+
+    Coordinate compression: ``box`` is cut at every blocker edge falling inside
+    it and one point decides each resulting cell.  ``box`` may be degenerate --
+    a port that a pad fits exactly leaves a line, or a point, to centre on.
+    """
+    x1, y1, x2, y2 = box
+    xs = sorted({x1, x2} | {min(max(v, x1), x2) for b in blockers for v in (b[0], b[2])})
+    ys = sorted({y1, y2} | {min(max(v, y1), y2) for b in blockers for v in (b[1], b[3])})
+    at_x = [(xs[i] + xs[i + 1]) / 2 for i in range(len(xs) - 1)] or [x1]
+    at_y = [(ys[i] + ys[i + 1]) / 2 for i in range(len(ys) - 1)] or [y1]
+    return all(
+        any(b[0] <= px <= b[2] and b[1] <= py <= b[3] for b in blockers)
+        for px in at_x
+        for py in at_y
+    )
+
+
+def _via_landing(rect, obstructions) -> str:
+    """Whether a via can land on one port RECT: ``ok``, ``nofit`` or ``blocked``.
+
+    ``nofit`` -- the RECT is under 0.21 um across, so no via can be placed on
+    it however well it sits on the grid.  ``blocked`` -- a pad fits, but the
+    macro's own obstructions on the layer above cover every position the via
+    centre could take.  That second one is what ``magic lef write -pinonly``
+    produces when a cell routes its output up to Metal2 and labels only the
+    Metal1 end: the strap the pin needs is written out as an obstruction
+    sitting on top of the pin.
+    """
+    layer, x1, y1, x2, y2 = rect
+    if layer not in LAYER_ABOVE:          # topmost routing layer, nothing above
+        return "ok"
+    above = [b for b in obstructions if b[0] == LAYER_ABOVE[layer]]
+    fits = False
+    for long_axis, below_w, below_h, above_w, above_h in VIA_LANDING:
+        span_x = _centre_span(x1, x2, below_w, long_axis == "x")
+        span_y = _centre_span(y1, y2, below_h, long_axis == "y")
+        if span_x is None or span_y is None:
+            continue
+        fits = True
+        # Where the via centre may sit for the pad below to stay on the port,
+        # against where it may not for the pad above to clear an obstruction.
+        centres = (span_x[0], span_y[0], span_x[1], span_y[1])
+        blocked = [
+            (bx1 - above_w / 2, by1 - above_h / 2, bx2 + above_w / 2, by2 + above_h / 2)
+            for _, bx1, by1, bx2, by2 in above
+        ]
+        if not _region_covered(centres, blocked):
+            return "ok"
+    return "blocked" if fits else "nofit"
 
 
 def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, float]]) -> Tuple[str, ...]:
@@ -340,6 +459,19 @@ def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, flo
         lo, hi = (y1, y2) if axis == "y" else (x1, x2)
         lo, hi = min(lo, hi) / 1000.0, max(lo, hi) / 1000.0
         if _covers_track(lo, hi, axis):
+            # On the grid, but a wire that runs onto the port still has to get
+            # down to it. The via pad's short side has no room to spill.
+            across = min(abs(x2 - x1), abs(y2 - y1)) / 1000.0
+            floor_nm = int(round(VIA_LANDING_SHORT_SIDE_UM * 1000))
+            if across < VIA_LANDING_SHORT_SIDE_UM - GRID_TOL_UM:
+                problems.append(
+                    f"port {name} on {layer} is {int(round(across * 1000))} nm "
+                    f"across and no via can land on it: the smallest ViaN pad "
+                    f"is 290 x {floor_nm} nm, and the short side cannot hang "
+                    f"off the port the way the long side can. Detailed routing "
+                    "rejects this cell with 'DRT-0073 No access point'; grow "
+                    "the port across the wire, not just along it"
+                )
             continue
         offset, pitch = TRACK_UM[axis]
         pitch_nm = int(round(pitch * 1000))
@@ -407,6 +539,9 @@ def lef_pin_access(
     reachable: Dict[str, Tuple[str, ...]] = {}
     problems: List[str] = []
 
+    obs_block = _LEF_OBS_RE.search(macros[macro])
+    obstructions = _layer_rects(obs_block.group(1)) if obs_block else []
+
     for name, body in _LEF_PIN_RE.findall(macros[macro]):
         use = _LEF_USE_RE.search(body)
         if use is not None and use.group(1).upper() in ("POWER", "GROUND"):
@@ -445,6 +580,33 @@ def lef_pin_access(
 
         reachable[name] = tuple(dict.fromkeys(hits))
         if hits:
+            ports = [r for r in _layer_rects(body) if r[0] in ROUTING_AXIS]
+            landings = [_via_landing(rect, obstructions) for rect in ports]
+            if "ok" in landings:
+                continue
+            if "blocked" in landings:
+                above = ", ".join(
+                    dict.fromkeys(
+                        LAYER_ABOVE[lay] for lay in layers_seen if lay in LAYER_ABOVE
+                    )
+                )
+                problems.append(
+                    f"PIN {name} is big enough for a via, but every via "
+                    f"landing is covered by the macro's own OBS on {above}. "
+                    "That is what -pinonly does to a port whose metal is only "
+                    f"labelled on {layers_seen[0]}: label the {above} strap as "
+                    "part of the port too. Detailed routing fails this cell "
+                    "with 'DRT-0073 No access point'"
+                )
+            else:
+                problems.append(
+                    f"PIN {name} covers a track but is under "
+                    f"{VIA_LANDING_SHORT_SIDE_UM} um in one direction, so no "
+                    "via can land on it (the smallest ViaN pad is 0.29 x 0.21 "
+                    "um). Detailed routing fails this cell with 'DRT-0073 No "
+                    "access point'; grow the port across the wire, not just "
+                    "along it"
+                )
             continue
 
         if not layers_seen:

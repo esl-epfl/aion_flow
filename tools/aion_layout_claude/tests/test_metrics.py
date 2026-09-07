@@ -309,8 +309,11 @@ END sg13g2_inv_1
 """
 
 
-def _pin_lef(*pins):
-    """A macro carrying exactly the PIN blocks given, as (name, use, body)."""
+def _pin_lef(*pins, obs=()):
+    """A macro carrying exactly the PIN blocks given, as (name, use, body).
+
+    ``obs`` is the body of an OBS block, in the same form as a port body.
+    """
     lines = [f"MACRO {CELL}", "  CLASS CORE ;",
              f"  SIZE {KNOWN_WIDTH_UM} BY {KNOWN_HEIGHT_UM} ;", "  SITE CoreSite ;"]
     for name, use, geometry in pins:
@@ -321,6 +324,10 @@ def _pin_lef(*pins):
         lines.extend(f"      {line}" for line in geometry)
         lines.append("    END")
         lines.append(f"  END {name}")
+    if obs:
+        lines.append("  OBS")
+        lines.extend(f"      {line}" for line in obs)
+        lines.append("  END")
     lines.append(f"END {CELL}")
     return "\n".join(lines) + "\n"
 
@@ -358,9 +365,10 @@ def test_a_metal1_pin_needs_a_horizontal_track(tmp_path):
 
 def test_a_metal2_pin_needs_a_vertical_track(tmp_path):
     """Metal2 is DIRECTION VERTICAL, so the axis flips to x = n * 0.48 um."""
-    # Same y span as the Metal1 failure above, but on Metal2 y no longer matters.
-    on = ("LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.250 ;")   # x 2.15..2.55 > 2.40
-    off = ("LAYER Metal2 ;", "RECT 2.500 1.090 2.850 1.250 ;")  # between 2.40 and 2.88
+    # Overlapping the Metal1 failure above in y, but on Metal2 y only has to be
+    # wide enough for a via to land -- which line it falls on no longer matters.
+    on = ("LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.390 ;")   # x 2.15..2.55 > 2.40
+    off = ("LAYER Metal2 ;", "RECT 2.500 1.090 2.850 1.390 ;")  # between 2.40 and 2.88
 
     good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", on))))
     assert good.ok, f"x 2.15..2.55 contains the track at x = 2.40: {good.problems}"
@@ -373,7 +381,7 @@ def test_a_metal2_pin_needs_a_vertical_track(tmp_path):
 def test_a_pin_passes_on_any_one_of_its_layers(tmp_path):
     """A port drawn on two metals only has to be reachable on one of them."""
     both = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.250 ;",   # off grid
-            "LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.250 ;")   # on grid in x
+            "LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.390 ;")   # on grid in x
     access = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", both))))
 
     assert access.ok, (
@@ -381,6 +389,60 @@ def test_a_pin_passes_on_any_one_of_its_layers(tmp_path):
         f"even though the Metal1 rect has none: {access.problems}"
     )
     assert access.reachable["O0"] == ("Metal2 x",)
+
+
+def test_a_port_on_a_track_still_needs_room_for_the_via(tmp_path):
+    """Covering a track is half of it: the wire also has to get down to the port.
+
+    This is AION_a21oi_nor2_1/O0 as first drawn.  Its y span 1.09..1.27 does
+    contain the track at 1.26, so the track rule passed it and detailed routing
+    still aborted -- 0.18 um is under the 0.21 um short side of a Via1 landing
+    pad, so there is nowhere to put the via.  0.21 um is the whole difference.
+    """
+    thin = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.270 ;")   # 0.40 x 0.18
+    grown = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.300 ;")  # 0.40 x 0.21
+
+    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", thin))))
+    assert not bad.ok, "0.18 um across cannot hold a via, on grid or not"
+    assert "no via can land on it" in bad.problems[0]
+    assert bad.reachable["O0"] == ("Metal1 y",), (
+        "the port does cover a track -- that is what makes it worth catching here"
+    )
+
+    good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", grown))))
+    assert good.ok, f"0.21 um is exactly a landing pad: {good.problems}"
+
+
+def test_a_landing_pad_may_hang_off_the_end_of_the_port(tmp_path):
+    """Only the pad's short side has to fit; the long side runs along the wire.
+
+    sg13g2_nand4_1/A is the PDK's own witness: its widest port RECT is 0.275 um
+    against a 0.29 um pad, and it routes, because the overhang lands on the
+    rest of the net rather than on nothing.  Requiring the whole pad to sit
+    inside the port would reject a shipping standard cell.
+    """
+    narrow = ("LAYER Metal1 ;", "RECT 1.965 1.590 2.240 1.850 ;")  # 0.275 x 0.26
+    access = lef_pin_access(_write(tmp_path, _pin_lef(("A", "SIGNAL", narrow))))
+    assert access.ok, f"0.26 um across clears the 0.21 um short side: {access.problems}"
+
+
+def test_an_obstruction_over_the_port_leaves_the_via_nowhere_to_go(tmp_path):
+    """A port whose own strap was written out as an obstruction is unroutable.
+
+    This is AION_nand2_o21ai_0/O0.  The cell routes its output up to Metal2,
+    but only the Metal1 end carries the label, so ``lef write -pinonly`` put
+    the strap in OBS -- sitting exactly on top of the pin, where the via would
+    have gone.  Moving that same rect into the port is the fix.
+    """
+    port = ("LAYER Metal1 ;", "RECT 1.790 0.960 2.050 1.270 ;")
+    strap = ("LAYER Metal2 ;", "RECT 1.835 0.950 2.035 2.650 ;")
+
+    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", port), obs=strap)))
+    assert not bad.ok, "the Metal2 obstruction covers every via landing"
+    assert "every via landing is covered" in bad.problems[0]
+
+    good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", port + strap))))
+    assert good.ok, f"labelled as part of the port, the strap is access: {good.problems}"
 
 
 def test_power_pins_are_not_graded(tmp_path):

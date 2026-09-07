@@ -794,6 +794,14 @@ def verilog_model_text(
         "// with -gspecify; Questa keeps them by default; Verilator ignores them and",
         "// simulates this model at zero delay, which is all it ever does with a gate",
         "// netlist. So this one file serves the timed and the untimed runs both.",
+        "//",
+        "// STA does not read this file, and the marker below is what tells OpenSTA's",
+        "// Verilog reader to skip it. No timing is lost by that: the cell's arcs come",
+        "// from its .lib, which LibreLane loads first (EXTRA_LIBS), so the instance",
+        "// links as a liberty leaf cell and is timed like any PDK cell. Without the",
+        "// marker OpenSTA aborts the whole run on the assign expression below --",
+        "// its reader takes structural netlists only, not operators or specify.",
+        "/// sta-blackbox",
         "",
     ]
 

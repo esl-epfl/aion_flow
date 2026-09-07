@@ -296,6 +296,26 @@ def test_the_module_body_is_not_empty(netlist_path, tmp_path):
     assert body.strip(), "the module body is empty"
 
 
+def test_the_model_is_marked_sta_blackbox(netlist_path, tmp_path):
+    """Without the marker, OpenSTA aborts PnR instead of skipping the file.
+
+    LibreLane hands every EXTRA_VERILOG_MODELS file to OpenSTA's Verilog
+    reader, which takes structural netlists only -- it stops on the `assign`
+    expression this exporter emits and takes the whole run down with it.  The
+    marker makes it skip the file; the cell is still fully timed, because its
+    arcs come from the Liberty read just before (EXTRA_LIBS).
+    """
+    text = model(netlist_path, tmp_path, pins=PINS)
+
+    assert "/// sta-blackbox" in text, (
+        f"the model must carry the '/// sta-blackbox' marker or STA fails the "
+        f"run on the assign expression below it:\n{text}"
+    )
+    assert text.index("/// sta-blackbox") < text.index("module "), (
+        f"the marker belongs in the header, above the module:\n{text}"
+    )
+
+
 def test_the_body_computes_what_the_netlist_computes(netlist_path, tmp_path):
     """Read the emitted expression back and grade it against the transistors."""
     text = model(netlist_path, tmp_path, pins=PINS)

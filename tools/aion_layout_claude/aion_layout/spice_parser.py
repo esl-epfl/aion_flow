@@ -105,8 +105,8 @@ class Subckt:
     def input_nets(self) -> List[str]:
         """Return external input pins (everything except rails and output)."""
         rails = {self.vdd_net, self.vss_net}
-        # Heuristic: the output is the only external pin connected to both a
-        # PMOS drain and an NMOS drain.
+        # Heuristic: the output is the only external pin a PMOS and an NMOS
+        # both sit on; everything else that is not a rail is an input.
         out = self.output_net
         return [p for p in self.pins if p not in rails and p != out]
 
@@ -114,16 +114,23 @@ class Subckt:
     def output_net(self) -> Optional[str]:
         """Guess the output net.
 
-        The output is the external pin that is connected to at least one PMOS
-        drain and at least one NMOS drain.
+        The output is the external pin that at least one PMOS and at least one
+        NMOS sit on with a channel terminal.  Drain and source count as the
+        same thing on purpose: a MOSFET's channel terminals are
+        interchangeable, and Magic's extractor writes them in whatever order it
+        walked the geometry in.  Reading the two apart made every PEX netlist
+        unclassifiable -- the output arrives on a PMOS *source* as readily as
+        on its drain -- while the schematic it was extracted from parsed fine.
+        A gate terminal is still never a drive, which is what keeps the inputs
+        out of the candidate set.
         """
         candidates: Set[str] = set()
         for pin in self.pins:
             if pin in (self.vdd_net, self.vss_net):
                 continue
-            has_pmos_drain = any(d.drain == pin for d in self.pmos_devices)
-            has_nmos_drain = any(d.drain == pin for d in self.nmos_devices)
-            if has_pmos_drain and has_nmos_drain:
+            on_pmos = any(pin in (d.drain, d.source) for d in self.pmos_devices)
+            on_nmos = any(pin in (d.drain, d.source) for d in self.nmos_devices)
+            if on_pmos and on_nmos:
                 candidates.add(pin)
         if not candidates:
             return None

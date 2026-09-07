@@ -96,12 +96,46 @@ def test_rails_and_output_are_recognised(subckt):
         f"be drawn: {subckt.vdd_net}/{subckt.vss_net}"
     )
     assert subckt.output_net == "O0", (
-        "O0 is the only external pin driven by both a PMOS and an NMOS drain, "
-        f"which is what makes it the output: {subckt.output_net}"
+        "O0 is the only external pin a PMOS and an NMOS both sit on, which is "
+        f"what makes it the output: {subckt.output_net}"
     )
     assert subckt.input_nets == ["I0", "I1", "I2"], (
         f"the inputs are everything that is neither a rail nor the output: "
         f"{subckt.input_nets}"
+    )
+
+
+#: One inverter written the way Magic's extractor writes it: the output is the
+#: PMOS *source* and the NMOS *source*, because the two channel terminals of a
+#: MOSFET are interchangeable and the extractor emits them in the order it
+#: walked the geometry, not in the order the schematic wrote them.
+EXTRACTED_INVERTER = """\
+.subckt INV I0 O0 VDD VSS
+X0 VDD I0 O0 VDD sg13_lv_pmos w=1.12u l=0.13u
+X1 VSS I0 O0 VSS sg13_lv_nmos w=0.74u l=0.13u
+.ends
+"""
+
+
+def test_an_extracted_netlist_still_names_its_output():
+    """Drain and source are one terminal for this question, or PEX is unusable.
+
+    Every netlist the characterizer sees comes out of Magic, and Magic never
+    promises which channel terminal it writes first.  A rule that demanded a
+    PMOS *drain* and an NMOS *drain* passed on the schematic and then failed on
+    the extraction of that same schematic -- `characterize` could not tell
+    which port was the output, and step 6 stopped after PEX with every check
+    already clean.
+    """
+    subckt = parse_spice(EXTRACTED_INVERTER)[0]
+
+    assert subckt.output_net == "O0", (
+        "O0 is on a channel terminal of both devices and on the gate of "
+        f"neither, so it is the output whichever terminal it landed on: "
+        f"{subckt.output_net}"
+    )
+    assert subckt.input_nets == ["I0"], (
+        f"I0 only ever appears on a gate, so it is an input: {subckt.input_nets}"
     )
 
 

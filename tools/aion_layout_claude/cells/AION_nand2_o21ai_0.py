@@ -117,14 +117,19 @@ M1_NSIG = (620, M1_LOWER[1])     # nmos signal stub, both contact rows
 M1_PSIG = (2310, 2910)           # pmos stub over both contact rows
 M1_PVDD = (2310, VDD_M1[0])      # pmos VDD stub up to the rail
 
-TAP_CONT_X = [150 + 430 * k for k in range(9)]
+# One 160 nm cut per CoreSite, centred in it: the rail tap cuts of an abutted
+# neighbour then land on exactly the same rectangles instead of partly on them.
+TAP_CONT_X = [240 + SITE_W * k for k in range(CELL_W // SITE_W)]
 
 # ------------------------------------------------- the O0 Metal2 jumper ----
 V1_HW = 95                       # Via1 is exactly 190 nm
 V1_X = 1935                      # inside the nmos N3 stub / pmos O0 bar
 V1_YB = (1010, 1200)
 V1_YT = (2400, 2590)
-M2_X = (V1_X - 100, V1_X + 100)  # 200 nm wide, 5 nm side enclosure
+# The strap *is* the O0 port (see below), so it is drawn 220 nm wide: a port
+# has to be at least 210 nm across for a ViaN landing, and M2.a's 200 nm
+# minimum width is 10 nm short of that.
+M2_X = (V1_X - 110, V1_X + 110)  # 220 nm wide, 15 nm side enclosure
 M2_Y = (950, 2650)               # 50 nm endcap enclosure at both ends
 # The O0 landing is stretched up to 1270 so the port covers the y = 1260 nm
 # Metal1 routing track; 1450 - 1270 = 180 nm keeps M1.b to the gate pads.
@@ -162,6 +167,9 @@ def generate(cell_name: str = CELL_NAME, tech: Tech = sg13g2_tech) -> Cell:
     metal1_pin = Layer(name=f"{metal1.name}.pin",
                        gds_layer=metal1.gds_layer,
                        gds_datatype=metal1.pin_datatype)
+    metal2_pin = Layer(name=f"{metal2.name}.pin",
+                       gds_layer=metal2.gds_layer,
+                       gds_datatype=metal2.pin_datatype)
 
     def box(layer: Layer, x1, y1, x2, y2) -> None:
         cell.add_shape(RectShape(layer, Rect.from_lbrt(x1, y1, x2, y2)))
@@ -171,6 +179,14 @@ def generate(cell_name: str = CELL_NAME, tech: Tech = sg13g2_tech) -> Cell:
         cell.add_shape(RectShape(metal1_pin, rect))
         cell.add_shape(TextShape(metal1, name, rect.center, purpose="label"))
         cell.add_port(Port(name=name, net=name, layer=metal1, rect=rect,
+                           direction=PIN_DIRECTION[name]))
+
+    def m2_pin(name: str, x1, y1, x2, y2) -> None:
+        """Same as ``pin`` but on Metal2, where the O0 strap already is."""
+        rect = Rect.from_lbrt(x1, y1, x2, y2)
+        cell.add_shape(RectShape(metal2_pin, rect))
+        cell.add_shape(TextShape(metal2, name, rect.center, purpose="label"))
+        cell.add_port(Port(name=name, net=name, layer=metal2, rect=rect,
                            direction=PIN_DIRECTION[name]))
 
     def cuts(xc, rows) -> None:
@@ -247,7 +263,11 @@ def generate(cell_name: str = CELL_NAME, tech: Tech = sg13g2_tech) -> Cell:
     # ------------------------------------------------------------- pins ---
     for name, gi in PIN_GATE.items():
         pin(name, XG[gi] - M1_PAD_HW, M1_PAD_Y[0], XG[gi] + M1_PAD_HW, M1_PAD_Y[1])
-    pin("O0", XN[3] - STUB_HW, M1_LAND_YB[0], XN[3] + STUB_HW, M1_LAND_YB[1])
+    # O0 is declared on the Metal2 strap, not on the Metal1 landing: `lef write
+    # -pinonly` emits every unlabelled shape as OBS, so a Metal1 port would be
+    # published with this cell's own Metal2 parked on its via landing.  The
+    # strap spans x = 1920 nm, a Metal2 (vertical) routing track.
+    m2_pin("O0", M2_X[0], M2_Y[0], M2_X[1], M2_Y[1])
     pin("VDD", 0, VDD_M1[0], CELL_W, VDD_M1[1])
     pin("VSS", 0, VSS_M1[0], CELL_W, VSS_M1[1])
 

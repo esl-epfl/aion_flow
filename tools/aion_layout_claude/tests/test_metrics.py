@@ -31,6 +31,7 @@ from aion_layout.metrics import (
     CellGeometry,
     MetricsError,
     _grade_footprint,
+    drawn_shapes,
     gds_boundary,
     layer_inventory,
     lef_macro_geometry,
@@ -38,6 +39,7 @@ from aion_layout.metrics import (
     lef_pin_access,
     pdk_lef_geometry,
     routing_metals_used,
+    tap_contact_problems,
 )
 from conftest import CELL, KNOWN_AREA_UM2, KNOWN_HEIGHT_UM, KNOWN_WIDTH_UM
 
@@ -443,6 +445,63 @@ def test_an_obstruction_over_the_port_leaves_the_via_nowhere_to_go(tmp_path):
 
     good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", port + strap))))
     assert good.ok, f"labelled as part of the port, the strap is access: {good.problems}"
+
+
+# ---------------------------------------------------------------------------
+# Rail tap contacts: the grid abutted rows share
+# ---------------------------------------------------------------------------
+
+ON_GRID = [(160.0, -80.0, 320.0, 80.0), (640.0, -80.0, 800.0, 80.0)]
+
+
+def test_rail_taps_on_the_pdk_grid_pass():
+    """160 + 480k is what all 2497 rail contacts of the PDK library use."""
+    assert tap_contact_problems(ON_GRID) == ()
+    top = [(x1, 3700.0, x2, 3860.0) for x1, _, x2, _ in ON_GRID]
+    assert tap_contact_problems(top) == (), "the top rail is graded the same way"
+
+
+def test_rail_taps_off_the_grid_are_caught():
+    """The 150 + 430k grid the AION cells used, and what it cost.
+
+    Each contact is legal where it sits; what is not legal is what happens when
+    the row above puts its own contact at 160..320 and the two overlap by 70 nm.
+    """
+    off = [(70.0, -80.0, 230.0, 80.0), (500.0, -80.0, 660.0, 80.0)]
+    problems = tap_contact_problems(off)
+
+    assert len(problems) == 1, "one problem for the cell, not one per contact"
+    assert "2 power-rail tap contact(s)" in problems[0], problems[0]
+    assert "70..230" in problems[0], f"it has to name where they are: {problems[0]}"
+    assert "160 + 480k" in problems[0], f"and the grid to move to: {problems[0]}"
+
+
+def test_a_contact_that_is_not_in_a_rail_is_not_a_tap():
+    """Transistor contacts sit on no shared grid and must not be graded."""
+    inside = [(70.0, 670.0, 230.0, 830.0), (1355.0, 2360.0, 1515.0, 2520.0)]
+    assert tap_contact_problems(inside) == (), (
+        "only geometry reaching into a rail is shared with the abutting row"
+    )
+
+
+def test_a_tap_of_the_wrong_size_is_caught():
+    """On-grid on its left edge is not enough if the cut is not 160 nm."""
+    wide = [(160.0, -80.0, 400.0, 80.0)]
+    assert tap_contact_problems(wide), (
+        "a 240 nm cut at x = 160 still overhangs the neighbour's 160..320"
+    )
+
+
+def test_drawn_shapes_reads_the_layers_the_abutment_rules_need(known_gds):
+    """The rules are only as good as what is read out of the GDS for them."""
+    drawn = drawn_shapes(known_gds, cell_name=CELL)
+
+    assert "Metal1" in drawn and drawn["Metal1"], f"no Metal1 read: {list(drawn)}"
+    assert "Cont" in drawn and drawn["Cont"], f"no Cont read: {list(drawn)}"
+    assert all(len(r) == 4 for r in drawn["Cont"]), "rectangles, in nm"
+    assert any(r[1] < 220 and r[3] > -220 for r in drawn["Cont"]), (
+        "the worked example does have rail taps, so the tap rule has input"
+    )
 
 
 def test_power_pins_are_not_graded(tmp_path):

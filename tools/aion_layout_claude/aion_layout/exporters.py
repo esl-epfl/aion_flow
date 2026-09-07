@@ -1022,10 +1022,8 @@ def _quarantine_stale_views(out_dir: Path, cell: str, libs: Sequence[Path]) -> L
     layout and no LEF at all is a half-published cell, which is the state this
     module exists to prevent.
     """
-    names = {f"{cell}.{ext}" for ext in ("gds", "v", "spice", "cdl", "lib")}
-    names.update(lib.name for lib in libs)
     moved: List[Path] = []
-    for name in sorted(names):
+    for name in _view_names(cell, libs):
         stale = out_dir / name
         if not stale.is_file():
             continue
@@ -1035,6 +1033,40 @@ def _quarantine_stale_views(out_dir: Path, cell: str, libs: Sequence[Path]) -> L
         stale.rename(quarantined)
         moved.append(quarantined)
     return moved
+
+
+def _view_names(cell: str, libs: Sequence[Path]) -> Tuple[str, ...]:
+    """The view filenames :func:`export_all` writes for ``cell``, sorted.
+
+    The LEF is not among them: it is written and graded before the others, and
+    :func:`_reject` quarantines it on its own.
+    """
+    names = {f"{cell}.{ext}" for ext in ("gds", "v", "spice", "cdl", "lib")}
+    names.update(lib.name for lib in libs)
+    return tuple(sorted(names))
+
+
+def _clear_quarantine(out_dir: Path, cell: str, libs: Sequence[Path]) -> List[Path]:
+    """Delete the quarantine an earlier failed publish of ``cell`` left behind.
+
+    A ``.rejected`` file is evidence about *the last* publish, and a later one
+    that succeeds makes it false.  ``make pnr`` refuses to publish a cell whose
+    export directory holds any -- rightly, since the whole point of the
+    quarantine is to be seen -- so without this one bad iteration would keep a
+    cell out of the flow permanently, however many clean exports followed it,
+    and the only way out would be deleting the file by hand.
+
+    Called once the LEF is written and graded clean.  A view that fails after
+    that quarantines again on the way out, so the directory still ends up
+    describing the publish that just happened rather than an older one.
+    """
+    removed: List[Path] = []
+    for name in _view_names(cell, libs) + (f"{cell}.lef",):
+        stale = out_dir / f"{name}.rejected"
+        if stale.is_file():
+            stale.unlink()
+            removed.append(stale)
+    return removed
 
 
 @dc.dataclass(frozen=True)
@@ -1124,6 +1156,11 @@ def export_all(
                 else ""
             ),
         )
+
+    # The LEF is good, so this publish is going ahead and any quarantine still
+    # sitting here describes a run that has been superseded. Leaving it would
+    # bar the cell from `make pnr` forever on the strength of an old failure.
+    _clear_quarantine(out, cell, libs)
 
     pins = (
         pins_from_pex(pex_spice, cell)

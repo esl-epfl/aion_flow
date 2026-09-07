@@ -208,8 +208,79 @@ of `sg13g2_a21oi_1` is a multi-rect stub from `y = 720` to `y = 3160`, crossing 
 tracks) or drop a `Via1` and put the port on Metal2, where the rule becomes an
 `x = n * 480` line.
 
-`make export` checks this and refuses to publish, and `make pnr` refuses to start. All 283
-signal pins of the PDK `sg13g2_stdcell` library satisfy it.
+### Every port must be at least 210 nm across
+
+Touching a track is not enough. The wire that runs onto the port still has to get *down*
+to it, and every `ViaN` in `sg13g2_tech.lef` is a 190 nm cut enclosed by **290 x 210 nm**
+on the metal below, in either orientation. The long side lies along the wire and may hang
+off the end of the port onto the rest of the net — `sg13g2_nand4_1`'s `A` does exactly
+that, its widest rect being 275 nm. The short side may not.
+
+This is how the second attempt failed. `AION_a21oi_nor2_1`'s `O0` was grown to
+`y = 1090 … 1270` to reach the track at `1260` — on the grid, and 180 nm across, so a via
+still had nowhere to go and detailed routing still aborted on every instance of the cell.
+That is 30 nm short, and it is the whole difference.
+
+`M1.a` min width is 160 nm, so a port drawn at minimum width is **never** enough on its
+own: widen it where the via goes. Same on Metal2 — `M2.a` min width is 200 nm, 10 nm under
+the rule, so a minimum-width strap is fine as a wire and not as a port.
+
+### Nothing may sit on the port's via landing
+
+`make export` runs `lef write -hide -pinonly`, which writes **only the labelled rectangle
+as a `PORT`, and every other shape in the cell as `OBS`** — the rest of the port's own net
+included. `AION_nand2_o21ai_0` died on that. It routes `O0` up to Metal2 correctly, but
+the label sits on the Metal1 end, so the strap was exported as
+
+```
+OBS
+  LAYER Metal2 ;
+    RECT 1.835 0.950 2.035 2.650 ;   <- parked on top of PIN O0
+```
+
+— a legal-looking Metal1 port with an obstruction exactly where its `Via1` would go.
+
+A `Cell` keys ports by name, so **a net gets one port rectangle**; you cannot label both
+ends. So either put the port on the layer that has the room, with `draw_m2_pin` — the
+strap then *is* the port — or keep Metal2 off the Metal1 port so the via up has somewhere
+to land.
+
+`make verify` checks all three of these against the built GDS, so they fail inside the
+`edit → verify` loop; `make export` checks the LEF magic wrote and refuses to publish; and
+`make pnr` refuses to start. All 283 signal pins of the PDK `sg13g2_stdcell` library
+satisfy them.
+
+## Rail tap contacts go at `x = 160 + 480k`
+
+Rows are placed **mirrored and abutted**, so a cell's VSS rail is the same silicon as the
+VSS rail of the row below it. The tap `Cont` cuts of both cells land in one band, and they
+have to be the *same rectangles*: either exactly on top of each other, or far enough
+apart. Partly on top of each other is neither, and it is a DRC error in both decks.
+
+Every one of the 2497 rail tap contacts across all 84 PDK `sg13g2_stdcell` cells sits at
+
+```
+x = 160 + 480k  ..  320 + 480k        one 160 nm cut per CoreSite, centred in it
+```
+
+with no exception. Put yours anywhere else and every abutment in the design is a
+violation. The first two AION cells used `TAP_CONT_X = [150 + 430 * k ...]` and the placed
+design came back with **10322 Magic and 2872 KLayout errors** — `Cnt.b`, `CntB.a1`, and
+Magic's "this layer can't abut or partially overlap between subcells" — while both cells
+were individually DRC-clean. The 480 − 430 = 50 nm beat is visible in the violation
+widths: 50, 100, 150, 200, 250 and 300 nm, about 557 of each.
+
+So for a cell `CELL_W` wide:
+
+```python
+TAP_CONT_X = [240 + 480 * k for k in range(CELL_W // 480)]   # contact centres
+```
+
+Nothing else lives in that band — the Metal1 rail and the tap Activ both span the full
+cell width — so moving the contacts onto the grid is self-contained.
+
+`make verify` checks this from the GDS. It is the same shape of problem as the two above:
+invisible in a cell on its own, fatal once it has neighbours.
 
 ---
 

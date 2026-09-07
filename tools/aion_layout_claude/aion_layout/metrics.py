@@ -28,7 +28,7 @@ import dataclasses as dc
 import math
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .tech import Tech, sg13g2_tech
 
@@ -92,6 +92,21 @@ LAYER_ABOVE = {
     "Metal3": "Metal4",
     "Metal4": "Metal5",
 }
+
+#: The power-rail tap contact grid, in nm.  Rows abut mirrored, so the VDD rail
+#: of one row *is* the VDD rail of the row above it: the tap ``Cont`` cuts of
+#: both cells land in the same band and have to be the same rectangles.  All
+#: 2497 rail contacts of all 84 PDK ``sg13g2_stdcell`` cells sit at
+#: ``160 + 480k .. 320 + 480k`` -- one per ``CoreSite``, centred in it -- with
+#: no exception, so anything else partially overlaps a neighbour's and is a
+#: ``Cnt.b`` / ``CntB.a1`` violation in the placed design.
+TAP_CONT_PITCH_NM = 480.0
+TAP_CONT_OFFSET_NM = 160.0
+TAP_CONT_SIZE_NM = 160.0
+
+#: Half-height of a VDD/VSS rail, in nm: it spans -220 .. 220 about the row
+#: line.  Geometry reaching into that band is shared with the abutting row.
+RAIL_HALF_NM = 220.0
 
 
 class MetricsError(RuntimeError):
@@ -435,19 +450,26 @@ def _via_landing(rect, obstructions) -> str:
     return "blocked" if fits else "nofit"
 
 
-def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, float]]) -> Tuple[str, ...]:
-    """Grade declared ports against the track grid, in nanometres.
+def port_access_problems(
+    ports: Iterable[Tuple[str, str, float, float, float, float]],
+    drawn: Optional[Mapping[str, Iterable[Tuple[float, float, float, float]]]] = None,
+) -> Tuple[str, ...]:
+    """Grade declared ports for reachability, in nanometres.
 
     The LEF form of this check (:func:`lef_pin_access`) can only run after
     ``make export``, which needs magic and the container.  This one runs off
     the ports a generator declares, so ``make verify`` can fail a cell inside
     the drawing loop instead of at publish time, when it is too late for the
-    model that drew it to do anything about it.
+    model that drew it to do anything about it.  Everything the LEF form
+    rejects, this one has to reject too, or the loop cannot converge.
 
     ``ports`` are ``(name, layer, x1, y1, x2, y2)`` with the coordinates in nm,
-    which is what :class:`cell.Port` carries.
+    which is what :class:`cell.Port` carries.  ``drawn`` is what the cell puts
+    on each routing layer, from :func:`drawn_routing_metal`; without it the
+    obstruction rule is skipped, which is a weaker check, not a passing one.
     """
     problems: List[str] = []
+    drawn = drawn or {}
     for name, layer, x1, y1, x2, y2 in ports:
         if layer not in ROUTING_AXIS:
             problems.append(
@@ -472,6 +494,22 @@ def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, flo
                     "rejects this cell with 'DRT-0073 No access point'; grow "
                     "the port across the wire, not just along it"
                 )
+                continue
+            above = LAYER_ABOVE.get(layer)
+            blockers = [
+                (above, bx1 / 1000.0, by1 / 1000.0, bx2 / 1000.0, by2 / 1000.0)
+                for bx1, by1, bx2, by2 in (drawn.get(above, ()) if above else ())
+            ]
+            rect_um = (layer, x1 / 1000.0, y1 / 1000.0, x2 / 1000.0, y2 / 1000.0)
+            if blockers and _via_landing(rect_um, blockers) == "blocked":
+                problems.append(
+                    f"port {name} on {layer} has {above} drawn over every spot "
+                    f"its via could land on -- and only the rectangle you "
+                    f"declare as a port escapes OBS, so the cell's own {above} "
+                    f"blocks it. Detailed routing rejects this cell with "
+                    f"'DRT-0073 No access point'; declare {name} on {above} "
+                    f"where that metal is, or move the {above} off the port"
+                )
             continue
         offset, pitch = TRACK_UM[axis]
         pitch_nm = int(round(pitch * 1000))
@@ -485,6 +523,57 @@ def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, flo
             "No access point'"
         )
     return tuple(problems)
+
+
+def tap_contact_problems(
+    contacts: Iterable[Tuple[float, float, float, float]],
+    cell_height_nm: float = ROW_HEIGHT_UM * 1000.0,
+) -> Tuple[str, ...]:
+    """Grade the power-rail tap contacts against the grid the PDK abuts on.
+
+    Rows are placed mirrored and abutted, so a cell's VSS rail is the same
+    piece of silicon as the VSS rail of the row below it, and the tap ``Cont``
+    cuts of both cells land in one band.  Two cells using different grids put
+    contacts *partially* on top of each other -- neither coincident nor spaced
+    -- which is what Magic calls "this layer can't abut or partially overlap
+    between subcells" and KLayout files as ``Cnt.b`` / ``CntB.a1``.
+
+    None of that is visible in a cell on its own, which is why it is checked
+    here from the geometry rather than left to a DRC deck: the cell-level run
+    has no neighbour to collide with and passes clean.
+
+    ``contacts`` are the drawn ``Cont`` rectangles in nm, from
+    :func:`drawn_shapes`.
+    """
+    tol = GRID_TOL_UM * 1000.0
+    off_grid = []
+    for x1, y1, x2, y2 in contacts:
+        in_rail = any(
+            y1 < line + RAIL_HALF_NM and y2 > line - RAIL_HALF_NM
+            for line in (0.0, cell_height_nm)
+        )
+        if not in_rail:
+            continue
+        phase = (x1 - TAP_CONT_OFFSET_NM) % TAP_CONT_PITCH_NM
+        on_grid = min(phase, TAP_CONT_PITCH_NM - phase) < tol
+        right_size = abs((x2 - x1) - TAP_CONT_SIZE_NM) < tol
+        if not (on_grid and right_size):
+            off_grid.append((x1, x2))
+
+    if not off_grid:
+        return ()
+
+    shown = ", ".join(f"{x1:.0f}..{x2:.0f}" for x1, x2 in sorted(off_grid)[:4])
+    more = f" and {len(off_grid) - 4} more" if len(off_grid) > 4 else ""
+    return (
+        f"{len(off_grid)} power-rail tap contact(s) are off the abutment grid "
+        f"(x = {shown}{more} nm). Rows share their rails, so a tap Cont has to "
+        f"be one of the neighbour's exactly: x = {TAP_CONT_OFFSET_NM:.0f} + "
+        f"{TAP_CONT_PITCH_NM:.0f}k, {TAP_CONT_SIZE_NM:.0f} nm wide, one per "
+        "site, which every PDK cell uses. Off it they partially overlap and "
+        "the placed design fails Cnt.b / CntB.a1 -- invisible in this cell "
+        "alone, which is why it is graded here",
+    )
 
 
 @dc.dataclass(frozen=True)
@@ -593,10 +682,12 @@ def lef_pin_access(
                 problems.append(
                     f"PIN {name} is big enough for a via, but every via "
                     f"landing is covered by the macro's own OBS on {above}. "
-                    "That is what -pinonly does to a port whose metal is only "
-                    f"labelled on {layers_seen[0]}: label the {above} strap as "
-                    "part of the port too. Detailed routing fails this cell "
-                    "with 'DRT-0073 No access point'"
+                    "Only the rectangle carrying the port label is written out "
+                    f"as a PORT, so the rest of the {above} in the cell -- the "
+                    "pin's own net included -- ends up as an obstruction on top "
+                    "of it. Detailed routing fails this cell with 'DRT-0073 No "
+                    f"access point'; declare the port on {above} where that "
+                    f"metal already is, or move the {above} off the pin"
                 )
             else:
                 problems.append(
@@ -718,6 +809,62 @@ def layer_inventory(
             ),
         )
     return stats
+
+
+#: Layers read out of the GDS to grade a cell for what abutting it will do.
+#: The routing metals carry the obstructions a port has to survive; ``Cont``
+#: carries the power-rail taps, which the row above and below share.
+ABUTMENT_LAYERS = tuple(ROUTING_AXIS) + ("Cont",)
+
+
+def drawn_shapes(
+    gds_path: Path | str,
+    layers: Iterable[str] = ABUTMENT_LAYERS,
+    cell_name: Optional[str] = None,
+    tech: Optional[Tech] = None,
+) -> Dict[str, Tuple[Tuple[float, float, float, float], ...]]:
+    """Rectangles the cell draws on each named layer, merged, in nanometres.
+
+    For the routing metals this is the geometry ``lef write -pinonly`` turns
+    into ``OBS``: everything that is not the one rectangle carrying a port
+    label.  A port can only be labelled on one layer -- :class:`cell.Cell` keys
+    ports by name -- so from the point of view of a port on Metal1, *every*
+    Metal2 shape in the cell is an obstruction, its own net's strap included.
+
+    Merged and decomposed rather than taken as bounding boxes, so an L-shaped
+    piece of metal blocks the corner it occupies and not the corner it does
+    not.  Geometry in this PDK is rectilinear, so the decomposition is exact.
+    """
+    tech = tech or sg13g2_tech
+    path = Path(gds_path)
+    if not path.is_file():
+        raise MetricsError(f"no GDS at {path}")
+    try:
+        import klayout.db as pya
+    except Exception as exc:  # pragma: no cover - klayout is a hard dependency
+        raise MetricsError(f"klayout.db unavailable: {exc}") from exc
+
+    layout = pya.Layout()
+    layout.read(str(path))
+    top = _top_cell(layout, cell_name, path.name)
+    to_nm = layout.dbu * 1000.0
+
+    drawn: Dict[str, Tuple[Tuple[float, float, float, float], ...]] = {}
+    for name in layers:
+        layer = tech.layers.get(name)
+        if layer is None:
+            continue
+        index = layout.find_layer(*layer.gds_pair)
+        if index is None:
+            continue
+        region = pya.Region(top.begin_shapes_rec(index)).merged()
+        if region.is_empty():
+            continue
+        drawn[name] = tuple(
+            (box.left * to_nm, box.bottom * to_nm, box.right * to_nm, box.top * to_nm)
+            for box in (part.bbox() for part in region.decompose_trapezoids())
+        )
+    return drawn
 
 
 def routing_metals_used(
@@ -861,6 +1008,8 @@ __all__ = [
     "lef_macros",
     "lef_pin_access",
     "pdk_lef_geometry",
-    "port_track_problems",
+    "port_access_problems",
     "routing_metals_used",
+    "drawn_shapes",
+    "tap_contact_problems",
 ]

@@ -59,6 +59,19 @@ ON_TRACK_PORTS = [
     ("O0", "Metal1", 2150.0, 1570.0, 2550.0, 1790.0),  # crosses y = 1680
 ]
 
+#: Geometry a cell can be abutted with: rail tap contacts on the shared grid
+#: (x = 160 + 480k, one per site) and nothing drawn over a port's via landing.
+#:
+#: Supplied rather than read from ``known_gds`` because the worked example is
+#: itself off that grid -- every cells/*.py places taps at 150 + 430k -- so
+#: reading it would make the positive control below assert a defect.
+ABUTTABLE = {
+    "Cont": [
+        (160.0, -80.0, 320.0, 80.0),
+        (640.0, 3700.0, 800.0, 3860.0),
+    ],
+}
+
 
 def reports(tree):
     """The three parsed reports of a committed artifact tree."""
@@ -85,7 +98,7 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
     shutil.copy(known_gds, work / f"{CELL}.gds")
 
     def run(*, magic=None, klayout=None, lvs=None, geometry=ROW_LEGAL, tables=(1, ()),
-            ports=ON_TRACK_PORTS):
+            ports=ON_TRACK_PORTS, drawn=ABUTTABLE):
         base_magic, base_klayout, base_lvs = reports(clean_tree)
         monkeypatch.setattr(
             steps, "drc",
@@ -95,6 +108,7 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
         monkeypatch.setattr(steps, "gds_boundary", lambda *a, **k: geometry)
         monkeypatch.setattr(steps, "klayout_table_logs", lambda *a, **k: tables)
         monkeypatch.setattr(steps, "declared_ports", lambda *a, **k: ports)
+        monkeypatch.setattr(steps, "drawn_shapes", lambda *a, **k: drawn)
         return steps.verify(
             "unused-because-skip-build",
             CELL,
@@ -209,6 +223,65 @@ def test_a_port_off_the_routing_grid_is_not_a_pass(graded):
     )
     assert any("1260" in reason for reason in verdict.reasons), (
         f"and where the nearest track is, or it cannot act on it: {verdict.reasons}"
+    )
+
+
+def test_a_port_too_thin_for_a_via_fails_in_the_loop(graded):
+    """The thin-port half of pin access has to fail here, not only at export.
+
+    AION_a21oi_nor2_1/O0 as first drawn: on the grid, 180 nm across, and a hard
+    DRT-0073 in step 7.
+    """
+    verdict = graded(ports=[("O0", "Metal1", 2150.0, 1090.0, 2550.0, 1270.0)])
+
+    assert verdict.result == "FAIL", "180 nm across cannot take a via"
+    assert any("no via can land on it" in r for r in verdict.reasons), verdict.reasons
+
+
+def test_metal_drawn_over_a_port_fails_in_the_loop(graded):
+    """A strap over the port is an OBS in the LEF, so it has to fail here too.
+
+    AION_nand2_o21ai_0/O0: a Metal1 port on the grid and wide enough, with the
+    cell's own Metal2 output strap running straight over the only place a via
+    could land.  ``lef write -pinonly`` labels one rectangle and puts the rest
+    in OBS, so this passes every other check and dies in detailed routing.  The
+    verdict has to name it while the model that drew it can still move it --
+    which is the whole point of grading ports here rather than at export.
+    """
+    port = [("O0", "Metal1", 1790.0, 960.0, 2050.0, 1270.0)]
+    over = {"Metal2": [(1835.0, 950.0, 2035.0, 2650.0)]}
+    clear = {"Metal2": [(2400.0, 950.0, 2600.0, 2650.0)]}
+
+    blocked = graded(ports=port, drawn=over)
+    assert blocked.result == "FAIL", "the strap covers every via landing"
+    assert any("could land on" in r for r in blocked.reasons), blocked.reasons
+    assert any("declare O0 on Metal2" in r for r in blocked.reasons), (
+        f"the verdict has to say what to do about it: {blocked.reasons}"
+    )
+
+    moved = graded(ports=port, drawn=clear)
+    assert moved.result == "PASS", (
+        f"the same port is fine once the strap is off it: {moved.reasons}"
+    )
+
+
+def test_off_grid_rail_taps_fail_in_the_loop(graded):
+    """The other thing a cell does to its neighbours that it survives alone.
+
+    Rows abut mirrored, so a cell's VSS rail is the same silicon as the VSS
+    rail of the row below and their tap contacts land in one band.  The first
+    two AION cells placed theirs at 150 + 430k while all 84 PDK cells use
+    160 + 480k, so every abutment put contacts partially on top of each other:
+    10322 Magic and 2872 KLayout violations in a design whose cells were each
+    individually DRC-clean.
+    """
+    off = {"Cont": [(70.0, -80.0, 230.0, 80.0), (500.0, -80.0, 660.0, 80.0)]}
+
+    verdict = graded(drawn=off)
+    assert verdict.result == "FAIL", "off-grid taps collide with every neighbour"
+    assert any("abutment grid" in r for r in verdict.reasons), verdict.reasons
+    assert any("160 + 480k" in r for r in verdict.reasons), (
+        f"the verdict has to name the grid to move to: {verdict.reasons}"
     )
 
 

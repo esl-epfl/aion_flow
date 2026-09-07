@@ -109,13 +109,13 @@ minimum width is never enough on its own — it has to be widened where the via
 goes, which is what the PDK cells do (`sg13g2_inv_1`'s `Y` is 0.23 um across
 and 2.565 um long, crossing six tracks).
 
-## Label the whole net, not just the contact
+## Nothing may sit where the via lands
 
-`make export` runs `lef write -hide -pinonly`, which writes **only labelled
-geometry as a `PORT` and everything else as `OBS`** — including the rest of
-the port's own net. `AION_nand2_o21ai_0` failed on that: it routes `O0` up to
-`Metal2` correctly, but only the `Metal1` end carries a label, so the strap
-came out as
+`make export` runs `lef write -hide -pinonly`, which writes **only the
+labelled rectangle as a `PORT` and every other shape as `OBS`** — the rest of
+the port's own net included. `AION_nand2_o21ai_0` failed on that. It routes
+`O0` up to `Metal2` correctly, but the label is on the `Metal1` end, so the
+strap came out as
 
 ```
 OBS
@@ -124,15 +124,43 @@ OBS
 ```
 
 and the router had a legal-looking `Metal1` port with an obstruction parked
-where its via would have gone. Label every shape of a port's net, on every
-layer it reaches, and the strap becomes access instead of a blockage.
+where its via would have gone.
+
+A `Cell` keys its ports by name, so **a net gets exactly one port rectangle**
+— labelling both ends is not something the model can express. The two ways
+out are therefore:
+
+- declare the port on the layer where the metal has the room, so the strap
+  *is* the port: `cell.add_port(Port("O0", "O0", tech["Metal2"], strap))` —
+  note that a strap drawn at the `Metal2` minimum width of 0.20 um is 10 nm
+  under the landing-pad rule above, so draw it 0.21 um wide when it is a port
+- keep the upper metal off the port, so the via up has somewhere to go
+
+## Rail tap contacts go at `x = 160 + 480k`
+
+Rows are placed mirrored and abutted, so a cell's VSS rail is the same silicon as
+the VSS rail of the row below it, and the tap `Cont` cuts of both cells land in
+one band. They have to be the *same rectangles* — coincident, or far enough
+apart. Partly on top of each other is neither.
+
+All 2497 rail tap contacts of all 84 PDK `sg13g2_stdcell` cells sit at
+`x = 160 + 480k .. 320 + 480k`: one 160 nm cut per `CoreSite`, centred in it, no
+exception. `AION_a21oi_nor2_1` and `AION_nand2_o21ai_0` used `150 + 430k`, and
+the placed design came back with 10322 Magic and 2872 KLayout errors (`Cnt.b`,
+`CntB.a1`, and "this layer can't abut or partially overlap between subcells")
+with both cells individually DRC-clean.
+
+```python
+TAP_CONT_X = [240 + 480 * k for k in range(CELL_W // 480)]   # contact centres
+```
 
 ## What is checked, and where
 
-`make verify` grades the ports a generator declares, so a cell can be fixed
-inside the drawing loop; `make export` grades the LEF magic actually wrote and
-refuses to publish; `make pnr` refuses to start. All 283 signal pins of the
-PDK `sg13g2_stdcell` library pass all of it.
+`make verify` grades the ports a generator declares, the metal it draws over
+them **and its rail tap contacts**, so a cell can be fixed inside the drawing
+loop; `make export` grades the LEF magic actually wrote and refuses to publish;
+`make pnr` refuses to start. All 283 signal pins and all 2497 rail tap contacts
+of the PDK `sg13g2_stdcell` library pass all of it.
 
 These are *necessary* conditions, not sufficient ones — a port can satisfy
 every one of them and still be unroutable once the neighbouring instances'

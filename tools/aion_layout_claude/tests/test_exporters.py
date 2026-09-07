@@ -624,6 +624,49 @@ def test_a_publish_that_fails_late_leaves_nothing_discoverable(
     )
 
 
+def test_a_clean_publish_clears_an_earlier_refusal(
+    monkeypatch, tmp_path, netlist_path, known_gds
+):
+    """A ``.rejected`` file is a claim about the *last* publish of a cell.
+
+    ``make pnr`` refuses to publish a cell whose export directory holds any --
+    that is the whole point of the quarantine.  So one left behind by an
+    earlier iteration bars the cell from the flow however many clean exports
+    follow it, and the only way out is deleting the file by hand.  That is what
+    happened to AION_nand2_o21ai_0: a refused LEF at 11:38 kept a cell that
+    exported cleanly at 12:02 out of implementation/cells.
+    """
+    out = tmp_path / "final"
+    out.mkdir()
+
+    def fake_lef(gds, cell, path, **kwargs):
+        Path(path).write_text(lef_text())
+        return Path(path)
+
+    monkeypatch.setattr(exporters, "export_lef", fake_lef)
+
+    # what the earlier, failing iteration left behind
+    (out / f"{CELL}.lef.rejected").write_text("the LEF that was refused\n")
+    (out / f"{CELL}.gds.rejected").write_bytes(b"stale")
+
+    views = exporters.export_all(
+        cell=CELL,
+        gds=known_gds,
+        spice_netlist=netlist_path,
+        lib_files=[liberty_stating(tmp_path, "!I0*I1*!I2")],  # what the netlist computes
+        out_dir=out,
+    )
+
+    assert views.lef_check.ok, views.lef_check.problems
+    left = sorted(p.name for p in out.iterdir())
+    assert not any(name.endswith(".rejected") for name in left), (
+        f"a publish that succeeded left an older refusal behind: {left}"
+    )
+    assert f"{CELL}.lef" in left and f"{CELL}.gds" in left, (
+        f"and it still has to publish the views: {left}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CDL
 # ---------------------------------------------------------------------------

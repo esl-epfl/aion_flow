@@ -47,10 +47,13 @@ from typing import List, Optional, Set, Tuple
 from . import verification as _v
 from .metrics import (
     POWER_PIN_NAMES,
+    ROW_HEIGHT_UM,
     CellGeometry,
     MetricsError,
+    drawn_shapes,
     gds_boundary,
-    port_track_problems,
+    port_access_problems,
+    tap_contact_problems,
 )
 from .runner import (
     TOOL_DIR,
@@ -835,9 +838,21 @@ def verify(
             )
         )
 
-    # A port off the routing grid is DRC-clean, LVS-clean and row-legal, and
-    # then kills detailed routing in step 7 with DRT-0073.  Grading it here is
-    # what puts it inside the drawing loop, where it can still be fixed.
+    # What a cell does to its neighbours is DRC-clean, LVS-clean and row-legal
+    # on its own, and then takes step 7 down an hour later -- DRT-0073 in pin
+    # access, or thousands of Cnt.b violations once the rails abut.  Neither is
+    # visible in a cell by itself, so both are graded here from the geometry,
+    # inside the drawing loop where they can still be fixed.
+    drawn = None
+    try:
+        drawn = drawn_shapes(gds, cell_name=cell_name)
+    except MetricsError as exc:
+        errors.append(
+            f"the geometry of {cell_name} could not be read from {gds.name}, "
+            "so it was not checked for what abutting it would do: "
+            f"{_flatten(exc, 200)}"
+        )
+
     ports = declared_ports(gds)
     if ports is None:
         errors.append(
@@ -850,8 +865,16 @@ def verify(
             port for port in ports
             if port[0].upper() not in POWER_PIN_NAMES
         ]
-        for problem in port_track_problems(signal_ports):
-            failures.append(_flatten(problem, 300))
+        for problem in port_access_problems(signal_ports, drawn):
+            # 400, like the DRC and LVS reasons: these end with what to do
+            # about the problem, and a reason truncated before that is a
+            # reason the model cannot act on.
+            failures.append(_flatten(problem, 400))
+
+    if drawn is not None:
+        height_nm = (geometry.height_um if geometry else ROW_HEIGHT_UM) * 1000.0
+        for problem in tap_contact_problems(drawn.get("Cont", ()), height_nm):
+            failures.append(_flatten(problem, 400))
 
     if errors:
         result = RESULT_ERROR

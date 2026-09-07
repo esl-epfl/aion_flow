@@ -35,6 +35,7 @@ from aion_layout.metrics import (
     layer_inventory,
     lef_macro_geometry,
     lef_macros,
+    lef_pin_access,
     pdk_lef_geometry,
     routing_metals_used,
 )
@@ -306,6 +307,131 @@ MACRO sg13g2_inv_1
   SITE CoreSite ;
 END sg13g2_inv_1
 """
+
+
+def _pin_lef(*pins):
+    """A macro carrying exactly the PIN blocks given, as (name, use, body)."""
+    lines = [f"MACRO {CELL}", "  CLASS CORE ;",
+             f"  SIZE {KNOWN_WIDTH_UM} BY {KNOWN_HEIGHT_UM} ;", "  SITE CoreSite ;"]
+    for name, use, geometry in pins:
+        lines.append(f"  PIN {name}")
+        if use is not None:
+            lines.append(f"    USE {use} ;")
+        lines.append("    PORT")
+        lines.extend(f"      {line}" for line in geometry)
+        lines.append("    END")
+        lines.append(f"  END {name}")
+    lines.append(f"END {CELL}")
+    return "\n".join(lines) + "\n"
+
+
+def _write(tmp_path, text):
+    lef = tmp_path / "pins.lef"
+    lef.write_text(text)
+    return lef
+
+
+def test_a_metal1_pin_needs_a_horizontal_track(tmp_path):
+    """Metal1 is DIRECTION HORIZONTAL: its wires sit at y = n * 0.42 um.
+
+    So the y span decides, and the x span is free -- a Metal1 wire can stop at
+    any x.  Getting this backwards would pass the pin that DRT-0073 rejects and
+    reject four that route.
+    """
+    on = ("LAYER Metal1 ;", "RECT 0.975 1.450 1.255 1.790 ;")   # y 1.45..1.79 > 1.68
+    off = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.250 ;")  # between 0.84 and 1.26
+
+    good = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", on))))
+    assert good.ok, (
+        "y 1.45..1.79 contains the track at y = 1.68; x being off-grid is "
+        f"irrelevant on a horizontal layer: {good.problems}"
+    )
+    assert good.reachable["I0"] == ("Metal1 y",)
+
+    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
+    assert not bad.ok, (
+        "y 1.09..1.25 falls between the tracks at 0.84 and 1.26 -- this is the "
+        "exact geometry that aborted detailed routing"
+    )
+    assert bad.reachable["O0"] == ()
+
+
+def test_a_metal2_pin_needs_a_vertical_track(tmp_path):
+    """Metal2 is DIRECTION VERTICAL, so the axis flips to x = n * 0.48 um."""
+    # Same y span as the Metal1 failure above, but on Metal2 y no longer matters.
+    on = ("LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.250 ;")   # x 2.15..2.55 > 2.40
+    off = ("LAYER Metal2 ;", "RECT 2.500 1.090 2.850 1.250 ;")  # between 2.40 and 2.88
+
+    good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", on))))
+    assert good.ok, f"x 2.15..2.55 contains the track at x = 2.40: {good.problems}"
+    assert good.reachable["O0"] == ("Metal2 x",)
+
+    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
+    assert not bad.ok, "x 2.50..2.85 falls between the tracks at 2.40 and 2.88"
+
+
+def test_a_pin_passes_on_any_one_of_its_layers(tmp_path):
+    """A port drawn on two metals only has to be reachable on one of them."""
+    both = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.250 ;",   # off grid
+            "LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.250 ;")   # on grid in x
+    access = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", both))))
+
+    assert access.ok, (
+        "the Metal2 rect contains x = 2.40, so the router has a landing site "
+        f"even though the Metal1 rect has none: {access.problems}"
+    )
+    assert access.reachable["O0"] == ("Metal2 x",)
+
+
+def test_power_pins_are_not_graded(tmp_path):
+    """The PDN straps VDD and VSS; the signal router never lands on them."""
+    off = ("LAYER Metal1 ;", "RECT 0.200 0.200 0.360 0.360 ;")
+    by_use = lef_pin_access(
+        _write(tmp_path, _pin_lef(("VDD", "POWER", off), ("VSS", "GROUND", off)))
+    )
+    assert by_use.ok and by_use.reachable == {}, by_use.problems
+
+    # magic writes no USE line, so the names have to carry it on their own.
+    by_name = lef_pin_access(
+        _write(tmp_path, _pin_lef(("VDD", None, off), ("VSS", None, off)))
+    )
+    assert by_name.ok, f"VDD/VSS must be exempt without a USE line too: {by_name.problems}"
+
+
+def test_a_pin_with_no_routing_layer_geometry_is_unreachable(tmp_path):
+    """A port drawn only on a masterslice is not something a wire can reach."""
+    only_poly = ("LAYER GatPoly ;", "RECT 0.200 0.200 0.360 0.360 ;")
+    access = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", only_poly))))
+
+    assert not access.ok
+    assert any("no geometry on a routing layer" in p for p in access.problems), (
+        f"the reason must distinguish 'off the grid' from 'not on metal': {access.problems}"
+    )
+
+
+def test_a_polygon_port_is_reported_rather_than_assumed_good(tmp_path):
+    """Unmeasured is not passed -- the same rule the prBoundary check follows.
+
+    A POLYGON's bounding box can straddle a track while the polygon itself
+    does not, so passing it on the bbox would be inventing a verdict.
+    """
+    poly = ("LAYER Metal1 ;", "POLYGON 0.2 0.2 0.4 0.2 0.4 0.5 0.2 0.5 ;")
+    access = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", poly))))
+
+    assert not access.ok
+    assert any("POLYGON" in p for p in access.problems), access.problems
+
+
+def test_lef_pin_access_names_the_macro_when_there_are_several(tmp_path):
+    """Same contract as lef_macro_geometry: never guess which cell was meant."""
+    lef = tmp_path / "two.lef"
+    lef.write_text(_TWO_MACRO_LEF)
+
+    with pytest.raises(MetricsError) as excinfo:
+        lef_pin_access(lef)
+    assert CELL in str(excinfo.value) and "sg13g2_inv_1" in str(excinfo.value)
+
+    assert lef_pin_access(lef, CELL).cell == CELL
 
 
 def test_lef_macro_geometry_reads_the_size_line(tmp_path):

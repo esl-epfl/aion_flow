@@ -179,6 +179,38 @@ name: a missing label is a failed pin match, not a subtle timing issue. Internal
 no label. Put the label inside the shape it names, or the extractor may attach it to the
 wrong net.
 
+### Every port must cover a routing track
+
+LVS only cares that the label is on the right net. The **router** cares where the shape
+is, and it is stricter than it looks. Tracks
+(`libs.tech/librelane/sg13g2_stdcell/tracks.info`) run at `x = n * 480` nm and
+`y = n * 420` nm on every Metal. A wire runs *along* its layer's preferred direction, so
+it stops anywhere on that axis but is pinned to a track on the other one:
+
+| Layer    | `DIRECTION` | the port shape must contain |
+| -------- | ----------- | --------------------------- |
+| `Metal1` | HORIZONTAL  | a `y = n * 420` nm line     |
+| `Metal2` | VERTICAL    | an `x = n * 480` nm line    |
+
+A port that covers no track places fine, routes globally fine, then aborts the entire
+design in detailed routing with `DRT-0073 No access point`. That is a hard abort, not a
+DRC — nothing downgrades it, and it costs an hour of flow to discover.
+
+This is easy to get wrong on an **output** port squeezed between two other Metal1 shapes.
+`M1.a` min width is 160 nm and `M1.b` min spacing is 180 nm, so a port in a 520 nm channel
+has exactly 160 nm of room and 10 nm of slack against the 420 nm pitch. The first two AION
+cells both failed here: their `O0` topped out at `y = 1250` with the track at `y = 1260`.
+
+So place the port **against a track deliberately**, do not let it fall where the channel
+happens to leave room. Pick the track first, then draw the shape across it. If the port
+cannot grow where it sits, move the neighbouring Metal1 (the PDK cells do this — the `Y`
+of `sg13g2_a21oi_1` is a multi-rect stub from `y = 720` to `y = 3160`, crossing six
+tracks) or drop a `Via1` and put the port on Metal2, where the rule becomes an
+`x = n * 480` line.
+
+`make export` checks this and refuses to publish, and `make pnr` refuses to start. All 283
+signal pins of the PDK `sg13g2_stdcell` library satisfy it.
+
 ---
 
 ## Fix in this order
@@ -298,6 +330,10 @@ almost never the routing.
 - **The cell must stay row-legal**: height exactly 3780 nm, width an exact multiple of
   480 nm, `PIN VDD` and `PIN VSS` present. `make verify` checks it and `make export`
   refuses to publish a cell that fails it.
+- **Every signal port must cover a routing track**: a Metal1 port needs a `y = n * 420` nm
+  line inside it, a Metal2 port an `x = n * 480` nm line. Miss it and detailed routing
+  kills the whole design with `DRT-0073`, long after this cell looked finished.
+  `make export` refuses to publish a cell that fails it.
 - **The Verilog model is solved from the netlist, not written by you.** `make export`
   derives the cell's function from the transistor netlist, checks it against the
   `function` the characterizer measured in SPICE, and refuses to publish anything when

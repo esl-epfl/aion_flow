@@ -42,8 +42,14 @@ def lef_text(
     width=2.88,
     height=3.78,
     pins=("I0", "I1", "I2", "O0", "VDD", "VSS"),
+    pin_rect=(0.200, 0.340, 0.360, 0.500),
 ):
-    """A LEF macro with one knob per requirement, so each can be broken alone."""
+    """A LEF macro with one knob per requirement, so each can be broken alone.
+
+    ``pin_rect`` defaults to a Metal1 port straddling y = 0.42 um, the first
+    Metal1 track: a port that misses the track grid is a rejection, so the
+    passing fixture has to sit on one.
+    """
     lines = ["VERSION 5.7 ;", "BUSBITCHARS \"[]\" ;", "", f"MACRO {cell}"]
     if cell_class is not None:
         lines.append(f"  CLASS {cell_class} ;")
@@ -61,7 +67,7 @@ def lef_text(
             f"    USE {use} ;",
             "    PORT",
             "      LAYER Metal1 ;",
-            "        RECT 0.200 0.200 0.360 0.360 ;",
+            "        RECT {:.3f} {:.3f} {:.3f} {:.3f} ;".format(*pin_rect),
             "    END",
             f"  END {pin}",
         ]
@@ -198,6 +204,56 @@ def test_every_problem_is_reported_not_only_the_first(tmp_path):
     assert len(check.problems) >= 6, (
         f"six independent faults must produce at least six problems, got "
         f"{len(check.problems)}: {check.problems}"
+    )
+
+
+def test_a_pin_that_covers_no_routing_track_is_rejected(tmp_path):
+    """The failure that survives placement and kills detailed routing.
+
+    Metal1 is DIRECTION HORIZONTAL, so its wires run along y = n * 0.42 um. A
+    port between two tracks has nothing to land on and OpenROAD aborts the
+    whole design with DRT-0073, an hour into step 7 -- so it is graded here.
+    """
+    # y 0.200 .. 0.360 sits between the tracks at y = 0.0 and y = 0.42.
+    check = exporters.check_lef(
+        write_lef(tmp_path, pin_rect=(0.200, 0.200, 0.360, 0.360))
+    )
+
+    assert not check.ok, (
+        "a Metal1 port covering no y = n * 0.42 track is unroutable; "
+        f"check_lef passed it: {check.problems}"
+    )
+    assert any("covers no routing track" in p for p in check.problems), check.problems
+    assert any("DRT-0073" in p for p in check.problems), (
+        "the rejection must name the error it prevents, or the reader has no "
+        f"way to connect it to the failure they will otherwise see: {check.problems}"
+    )
+
+
+def test_only_the_offending_pin_is_reported(tmp_path):
+    """One problem per bad pin, so a redraw knows which port to move."""
+    check = exporters.check_lef(
+        write_lef(tmp_path, pins=("I0", "O0", "VDD", "VSS"),
+                  pin_rect=(0.200, 0.200, 0.360, 0.360))
+    )
+
+    offenders = [p for p in check.problems if "covers no routing track" in p]
+    assert len(offenders) == 2, (
+        f"I0 and O0 are both off the grid, VDD and VSS are exempt: {check.problems}"
+    )
+    assert not any("VDD" in p or "VSS" in p for p in offenders), (
+        f"power pins are not routed as signals and must not be graded: {offenders}"
+    )
+
+
+def test_a_power_pin_off_the_grid_is_not_a_problem(tmp_path):
+    """VDD and VSS are strapped by the PDN, not routed to a track."""
+    check = exporters.check_lef(
+        write_lef(tmp_path, pins=("VDD", "VSS"), pin_rect=(0.2, 0.2, 0.36, 0.36))
+    )
+
+    assert check.ok, (
+        f"only signal pins answer to the router's track grid: {check.problems}"
     )
 
 

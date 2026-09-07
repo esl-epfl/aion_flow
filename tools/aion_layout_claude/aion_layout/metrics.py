@@ -25,9 +25,10 @@ cell look larger the better it abuts.
 from __future__ import annotations
 
 import dataclasses as dc
+import math
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from .tech import Tech, sg13g2_tech
 
@@ -38,6 +39,31 @@ ROW_HEIGHT_UM = 3.78
 #: Tolerance for a dimension that has to be a multiple of the site, in um.
 #: The GDS database unit is 1 nm, so anything under half a nanometre is noise.
 GRID_TOL_UM = 5e-4
+
+#: SG13G2 routing tracks, from
+#: ``libs.tech/librelane/sg13g2_stdcell/tracks.info``: ``<layer> X 0.0 0.48``
+#: and ``<layer> Y 0.0 0.42`` on every Metal.  ``(offset, pitch)`` in um.
+TRACK_UM = {"x": (0.0, 0.48), "y": (0.0, 0.42)}
+
+#: Routing layer -> the axis whose track lines a pin drawn on it must cover,
+#: taken from ``DIRECTION`` in ``sg13g2_tech.lef``.  A wire runs *along* its
+#: layer's preferred direction, so it can stop at any coordinate on that axis
+#: but is pinned to a track on the other one: a HORIZONTAL layer routes along
+#: y = n * 0.42, a VERTICAL layer along x = n * 0.48.  A pin that covers no
+#: such line has nothing for a wire to land on, and detailed routing rejects
+#: the whole design with ``DRT-0073 No access point``.
+ROUTING_AXIS = {
+    "Metal1": "y",      # DIRECTION HORIZONTAL
+    "Metal2": "x",      # DIRECTION VERTICAL
+    "Metal3": "y",      # DIRECTION HORIZONTAL
+    "Metal4": "x",      # DIRECTION VERTICAL
+    "Metal5": "y",      # DIRECTION HORIZONTAL
+}
+
+#: Pins the router never touches, so the track rule does not apply to them.
+#: Matched by ``USE`` first; the names are the fallback for a LEF that omits
+#: it, which is what magic writes.
+POWER_PIN_NAMES = frozenset({"VDD", "VSS"})
 
 
 class MetricsError(RuntimeError):
@@ -267,6 +293,186 @@ def lef_macro_geometry(
     )
 
 
+#: ``PIN <name> ... END <name>`` inside a LEF ``MACRO`` body.
+_LEF_PIN_RE = re.compile(
+    r"^[ \t]*PIN[ \t]+(\S+)[ \t]*$(.*?)^[ \t]*END[ \t]+\1[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
+_LEF_LAYER_RE = re.compile(r"^\s*LAYER\s+(\S+)\s*;", re.MULTILINE)
+_LEF_RECT_RE = re.compile(
+    r"^\s*RECT\s+([0-9.eE+-]+)\s+([0-9.eE+-]+)\s+"
+    r"([0-9.eE+-]+)\s+([0-9.eE+-]+)\s*;",
+    re.MULTILINE,
+)
+_LEF_USE_RE = re.compile(r"^\s*USE\s+(\S+)\s*;", re.MULTILINE)
+_LEF_POLYGON_RE = re.compile(r"^\s*POLYGON\b", re.MULTILINE)
+
+
+def _covers_track(lo_um: float, hi_um: float, axis: str) -> bool:
+    """True when ``[lo, hi]`` contains a routing track line on ``axis``."""
+    offset, pitch = TRACK_UM[axis]
+    # First track at or above lo, then ask whether it is still inside.
+    n = math.ceil((lo_um - offset) / pitch - GRID_TOL_UM / pitch)
+    return offset + n * pitch <= hi_um + GRID_TOL_UM
+
+
+def port_track_problems(ports: Iterable[Tuple[str, str, float, float, float, float]]) -> Tuple[str, ...]:
+    """Grade declared ports against the track grid, in nanometres.
+
+    The LEF form of this check (:func:`lef_pin_access`) can only run after
+    ``make export``, which needs magic and the container.  This one runs off
+    the ports a generator declares, so ``make verify`` can fail a cell inside
+    the drawing loop instead of at publish time, when it is too late for the
+    model that drew it to do anything about it.
+
+    ``ports`` are ``(name, layer, x1, y1, x2, y2)`` with the coordinates in nm,
+    which is what :class:`cell.Port` carries.
+    """
+    problems: List[str] = []
+    for name, layer, x1, y1, x2, y2 in ports:
+        if layer not in ROUTING_AXIS:
+            problems.append(
+                f"port {name} is on {layer}, which is not a routing layer, so "
+                "no wire can reach it"
+            )
+            continue
+        axis = ROUTING_AXIS[layer]
+        lo, hi = (y1, y2) if axis == "y" else (x1, x2)
+        lo, hi = min(lo, hi) / 1000.0, max(lo, hi) / 1000.0
+        if _covers_track(lo, hi, axis):
+            continue
+        offset, pitch = TRACK_UM[axis]
+        pitch_nm = int(round(pitch * 1000))
+        n = math.floor((hi - offset) / pitch) + 1
+        nearest = int(round((offset + n * pitch) * 1000))
+        problems.append(
+            f"port {name} on {layer} spans {axis} {int(round(lo * 1000))}.."
+            f"{int(round(hi * 1000))} nm and covers no routing track: {layer} "
+            f"routes along {axis} = n * {pitch_nm} nm, and the nearest line is "
+            f"{nearest} nm. Detailed routing rejects this cell with 'DRT-0073 "
+            "No access point'"
+        )
+    return tuple(problems)
+
+
+@dc.dataclass(frozen=True)
+class PinAccess:
+    """Whether every signal pin of a cell is reachable by the router."""
+
+    cell: str
+    #: ``{pin name: the track lines it covers}``, one entry per signal pin.
+    reachable: Dict[str, Tuple[str, ...]]
+    #: Empty when every signal pin can be landed on; otherwise one per pin.
+    problems: Tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def lef_pin_access(
+    lef_path: Path | str,
+    macro: Optional[str] = None,
+) -> PinAccess:
+    """Check every signal pin of ``macro`` against the routing track grid.
+
+    This is the cheap, static half of what TritonRoute's pin access does.  It
+    is a *necessary* condition, not a sufficient one -- a pin can cover a track
+    and still be unroutable once the neighbours' obstructions are considered --
+    but it is the one an abstract drawn without the track grid in mind actually
+    fails, and it costs nothing to apply at export time instead of an hour into
+    detailed routing.
+
+    Validated against ``libs.ref/sg13g2_stdcell/lef/sg13g2_stdcell.lef``: all
+    283 signal pins of the PDK library pass.
+    """
+    path = Path(lef_path)
+    macros = lef_macros(path)
+    if not macros:
+        raise MetricsError(f"{path.name} defines no MACRO")
+    if macro is None:
+        if len(macros) != 1:
+            names = ", ".join(sorted(macros))
+            raise MetricsError(
+                f"{path.name} defines {len(macros)} macros ({names}); "
+                "name the one to check"
+            )
+        macro = next(iter(macros))
+    if macro not in macros:
+        raise MetricsError(
+            f"{path.name} defines no MACRO {macro!r}; it has: "
+            + ", ".join(sorted(macros))
+        )
+
+    reachable: Dict[str, Tuple[str, ...]] = {}
+    problems: List[str] = []
+
+    for name, body in _LEF_PIN_RE.findall(macros[macro]):
+        use = _LEF_USE_RE.search(body)
+        if use is not None and use.group(1).upper() in ("POWER", "GROUND"):
+            continue
+        if use is None and name.upper() in POWER_PIN_NAMES:
+            continue
+
+        if _LEF_POLYGON_RE.search(body):
+            # A POLYGON's bounding box covering a track does not mean the
+            # polygon does, so this is "we could not tell", which is not a
+            # pass.  Nothing in this flow emits one today.
+            problems.append(
+                f"PIN {name} is drawn with POLYGON geometry, which this check "
+                "cannot measure; redraw the port as RECTs"
+            )
+            continue
+
+        hits: List[str] = []
+        layers_seen: List[str] = []
+        layer: Optional[str] = None
+        for line in body.splitlines():
+            layer_match = _LEF_LAYER_RE.match(line)
+            if layer_match is not None:
+                layer = layer_match.group(1)
+                if layer in ROUTING_AXIS and layer not in layers_seen:
+                    layers_seen.append(layer)
+                continue
+            rect_match = _LEF_RECT_RE.match(line)
+            if rect_match is None or layer not in ROUTING_AXIS:
+                continue
+            x1, y1, x2, y2 = (float(v) for v in rect_match.groups())
+            axis = ROUTING_AXIS[layer]
+            lo, hi = (y1, y2) if axis == "y" else (x1, x2)
+            if _covers_track(min(lo, hi), max(lo, hi), axis):
+                hits.append(f"{layer} {axis}")
+
+        reachable[name] = tuple(dict.fromkeys(hits))
+        if hits:
+            continue
+
+        if not layers_seen:
+            problems.append(
+                f"PIN {name} has no geometry on a routing layer "
+                f"({', '.join(sorted(ROUTING_AXIS))}), so the router cannot "
+                "reach it at all"
+            )
+            continue
+
+        detail = []
+        for seen in layers_seen:
+            axis = ROUTING_AXIS[seen]
+            offset, pitch = TRACK_UM[axis]
+            detail.append(
+                f"{seen} routes along {axis} = n * {pitch} um"
+            )
+        problems.append(
+            f"PIN {name} covers no routing track: "
+            + "; ".join(detail)
+            + f", and no port RECT of {name} contains one. Detailed routing "
+            "fails this cell with 'DRT-0073 No access point'; grow the port "
+            "until it crosses a track, or drop a via up to the next metal"
+        )
+
+    return PinAccess(cell=macro, reachable=reachable, problems=tuple(problems))
+
+
 def pdk_lef_geometry(
     macros: List[str],
     lef_path: Path | str,
@@ -476,17 +682,23 @@ def cross_net_overlaps(
 
 __all__ = [
     "GRID_TOL_UM",
+    "POWER_PIN_NAMES",
+    "ROUTING_AXIS",
     "ROW_HEIGHT_UM",
     "SITE_WIDTH_UM",
+    "TRACK_UM",
     "CellGeometry",
     "LayerStat",
     "MetricsError",
     "NetShort",
+    "PinAccess",
     "gds_boundary",
     "cross_net_overlaps",
     "layer_inventory",
     "lef_macro_geometry",
     "lef_macros",
+    "lef_pin_access",
     "pdk_lef_geometry",
+    "port_track_problems",
     "routing_metals_used",
 ]

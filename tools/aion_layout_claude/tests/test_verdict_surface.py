@@ -51,6 +51,13 @@ ROW_LEGAL = CellGeometry(
     cell=CELL, width_um=2.88, height_um=3.78, source="prBoundary"
 )
 
+#: Ports a router can land on: Metal1 is horizontal, so each spans a
+#: y = n * 420 nm track.  ``(name, layer, x1, y1, x2, y2)`` in nm.
+ON_TRACK_PORTS = [
+    ("I0", "Metal1", 200.0, 340.0, 360.0, 500.0),      # crosses y = 420
+    ("O0", "Metal1", 2150.0, 1600.0, 2550.0, 1760.0),  # crosses y = 1680
+]
+
 
 def reports(tree):
     """The three parsed reports of a committed artifact tree."""
@@ -76,7 +83,8 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
     work.mkdir()
     shutil.copy(known_gds, work / f"{CELL}.gds")
 
-    def run(*, magic=None, klayout=None, lvs=None, geometry=ROW_LEGAL, tables=(1, ())):
+    def run(*, magic=None, klayout=None, lvs=None, geometry=ROW_LEGAL, tables=(1, ()),
+            ports=ON_TRACK_PORTS):
         base_magic, base_klayout, base_lvs = reports(clean_tree)
         monkeypatch.setattr(
             steps, "drc",
@@ -85,6 +93,7 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
         monkeypatch.setattr(steps, "lvs", lambda *a, **k: lvs or base_lvs)
         monkeypatch.setattr(steps, "gds_boundary", lambda *a, **k: geometry)
         monkeypatch.setattr(steps, "klayout_table_logs", lambda *a, **k: tables)
+        monkeypatch.setattr(steps, "declared_ports", lambda *a, **k: ports)
         return steps.verify(
             "unused-because-skip-build",
             CELL,
@@ -175,6 +184,58 @@ def test_an_unavailable_magic_report_is_an_error_not_a_pass(graded, tmp_path):
         f"a Magic report with no COUNT trailer is missing evidence: {verdict}"
     )
     assert any("Magic" in r for r in verdict.reasons)
+
+
+def test_a_port_off_the_routing_grid_is_not_a_pass(graded):
+    """The failure this grader was extended to catch.
+
+    Metal1 routes along y = n * 420 nm.  A port between two tracks is
+    DRC-clean, LVS-clean and row-legal, and then aborts detailed routing for
+    the whole design with DRT-0073 -- twelve minutes into step 7, long after
+    this cell looked finished.
+    """
+    verdict = graded(
+        ports=[("O0", "Metal1", 2150.0, 1090.0, 2550.0, 1250.0)]  # 10 nm under 1260
+    )
+
+    assert verdict.result == "FAIL", (
+        "the tools ran and the answer is that the layout is wrong, which is "
+        f"FAIL, not ERROR: {verdict.result} {verdict.reasons}"
+    )
+    assert any("DRT-0073" in reason for reason in verdict.reasons), (
+        "the reason must name the error it prevents, so a model reading the "
+        f"verdict knows what it is being asked to fix: {verdict.reasons}"
+    )
+    assert any("1260" in reason for reason in verdict.reasons), (
+        f"and where the nearest track is, or it cannot act on it: {verdict.reasons}"
+    )
+
+
+def test_power_ports_are_not_graded_against_the_track_grid(graded):
+    """VDD and VSS are strapped by the PDN; the signal router never lands."""
+    verdict = graded(
+        ports=ON_TRACK_PORTS + [
+            ("VDD", "Metal1", 0.0, 3560.0, 2880.0, 4000.0),
+            ("VSS", "Metal1", 0.0, -220.0, 2880.0, 220.0),
+        ]
+    )
+
+    assert verdict.result == "PASS", (
+        f"the rails answer to the PDN, not to the track grid: {verdict.reasons}"
+    )
+
+
+def test_ports_that_could_not_be_read_are_not_a_pass(graded):
+    """Unknown is not clean -- the rule the whole grader is built on."""
+    verdict = graded(ports=None)
+
+    assert verdict.result == "ERROR", (
+        "a build that recorded no ports leaves the track rule unchecked; "
+        f"reporting PASS would be inventing the answer: {verdict.result}"
+    )
+    assert any("routing track grid" in reason for reason in verdict.reasons), (
+        verdict.reasons
+    )
 
 
 def test_real_violations_are_a_fail(graded, dirty_tree):

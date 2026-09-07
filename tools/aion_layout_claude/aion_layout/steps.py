@@ -37,6 +37,7 @@ one finished closes that gap.
 from __future__ import annotations
 
 import dataclasses as dc
+import json
 import os
 import re
 import sys
@@ -44,7 +45,13 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
 from . import verification as _v
-from .metrics import CellGeometry, MetricsError, gds_boundary
+from .metrics import (
+    POWER_PIN_NAMES,
+    CellGeometry,
+    MetricsError,
+    gds_boundary,
+    port_track_problems,
+)
 from .runner import (
     TOOL_DIR,
     rel_to_tool,
@@ -175,7 +182,54 @@ if cell is None:
     raise SystemExit("generate() returned None instead of a Cell")
 Path(out_gds).parent.mkdir(parents=True, exist_ok=True)
 cell.write_gds(out_gds)
+
+# The ports go out beside the GDS so that verify can grade them against the
+# routing track grid.  They do not survive the GDS round trip as rectangles --
+# write_gds keeps only a label at each port's centre -- and the caller runs in
+# a different process, so the sidecar is how the geometry gets back.
+import json
+json.dump(
+    [
+        {{
+            "name": port.name,
+            "layer": port.layer.name,
+            "direction": port.direction,
+            "rect": [
+                port.rect.bottom_left.x, port.rect.bottom_left.y,
+                port.rect.top_right.x, port.rect.top_right.y,
+            ],
+        }}
+        for port in cell.ports.values()
+    ],
+    open(out_gds + ".ports.json", "w"),
+)
 """
+
+
+#: Written next to the GDS by :data:`_BUILD_SCRIPT`.
+PORTS_SUFFIX = ".ports.json"
+
+
+def declared_ports(gds: Path) -> Optional[List[Tuple[str, str, float, float, float, float]]]:
+    """Read the ports :func:`build_gds` recorded, or None when there are none.
+
+    None means "this build wrote no sidecar" -- an older build directory, or a
+    ``skip_build`` run against a GDS built before this existed.  That is not
+    the same as a cell with no ports, and must not be graded as one.
+    """
+    sidecar = Path(str(gds) + PORTS_SUFFIX)
+    try:
+        raw = json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        return None
+    ports = []
+    for entry in raw:
+        try:
+            x1, y1, x2, y2 = (float(v) for v in entry["rect"])
+            ports.append((str(entry["name"]), str(entry["layer"]), x1, y1, x2, y2))
+        except (KeyError, TypeError, ValueError):
+            return None
+    return ports
 
 
 def _gds_top_cells(gds: Path) -> List[str]:
@@ -780,6 +834,24 @@ def verify(
                 _flatten(p, 160) for p in geometry.problems
             )
         )
+
+    # A port off the routing grid is DRC-clean, LVS-clean and row-legal, and
+    # then kills detailed routing in step 7 with DRT-0073.  Grading it here is
+    # what puts it inside the drawing loop, where it can still be fixed.
+    ports = declared_ports(gds)
+    if ports is None:
+        errors.append(
+            f"the ports of {cell_name} could not be read from "
+            f"{gds.name}{PORTS_SUFFIX}, so they were not checked against the "
+            "routing track grid; rebuild the cell"
+        )
+    else:
+        signal_ports = [
+            port for port in ports
+            if port[0].upper() not in POWER_PIN_NAMES
+        ]
+        for problem in port_track_problems(signal_ports):
+            failures.append(_flatten(problem, 300))
 
     if errors:
         result = RESULT_ERROR

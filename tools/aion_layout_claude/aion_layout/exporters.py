@@ -346,9 +346,21 @@ def export_lef(
 ) -> Path:
     """Write the abstract LEF for ``cell`` with Magic, and prove it is honest.
 
-    Follows the ``lef:`` recipe of ``ref_makefile_1.mk``.  ``-hide -pinonly``
-    turns everything that is not a labelled pin into an obstruction, which is
-    what a block-level router needs from a standard cell.
+    Follows the ``lef:`` recipe of ``ref_makefile_1.mk``.  ``-pinonly`` turns
+    everything that is not a labelled pin into an obstruction, which is what a
+    block-level router needs from a standard cell.
+
+    ``-hide`` is deliberately *not* passed.  It replaces each layer's
+    obstruction with one bounding box, holed only where a pin has geometry on
+    that same layer -- an abstract for a hard macro whose internals are nobody
+    else's business.  A standard cell is the opposite case: the router has to
+    know where it may cross.  On a cell that routes on Metal1 only the two are
+    indistinguishable, which is why this went unnoticed until a cell used
+    Metal2; from then on ``-hide`` reports the whole Metal2 bounding box as
+    blocked, no Metal1 pin has a via landing left anywhere, and detailed
+    routing aborts with ``DRT-0073``.  Without it magic writes the real
+    rectangles, and a Metal2 strap blocks a pin only where it actually crosses
+    one.
 
     ``directions`` is optional and additive: when a caller knows a pin is an
     output, saying so here is the only way the published LEF can say so, because
@@ -378,7 +390,7 @@ def export_lef(
     script = (
         f"gds read {rel_to_tool(gds_path)}",
         f"load {cell}",
-        f"lef write {rel_to_tool(out)} -hide -pinonly 2um",
+        f"lef write {rel_to_tool(out)} -pinonly 2um",
     )
     command = (
         "printf '%s\\n' "
@@ -871,7 +883,11 @@ def export_verilog_model(
     """
     subckt = _subckt_of(spice_netlist, cell)
     try:
-        table = truth_table(subckt)
+        # The same map that types the ports here also tells the solver which
+        # pins to sweep.  It matters for a pass-gate cell and only there: a
+        # steered input sits on a channel terminal, so the topology alone reads
+        # it as an output and leaves the cell with nothing to sweep.
+        table = truth_table(subckt, directions=directions)
     except LogicError as exc:
         raise ExportError(
             f"no Verilog model can be written for {cell}: {exc}. Publishing the empty "

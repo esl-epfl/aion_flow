@@ -343,3 +343,91 @@ def test_an_expression_naming_a_pin_the_cell_does_not_have_is_refused():
 def test_an_unreadable_expression_is_refused(expression):
     with pytest.raises(LogicError):
         logic.parse_boolean(expression, known=("A", "B"))
+
+
+# ---------------------------------------------------------------------------
+# Pass gates
+# ---------------------------------------------------------------------------
+
+#: A transmission-gate 2:1 mux, the shape AION_mux2i_1 has: a select inverter,
+#: two TGs steering I0/I1 onto ``m``, and a restoring inverter on the output.
+#: Every signal pin sits on a channel terminal, so the topology alone cannot
+#: say which one the cell drives.
+TG_MUX = """
+.subckt tgmux I0 I1 I2 O0 VDD VSS
+XP0 Sb I2 VDD VDD sg13_lv_pmos w=1.12u l=0.13u
+XN0 Sb I2 VSS VSS sg13_lv_nmos w=740n l=0.13u
+XN1 m  Sb I0 VSS sg13_lv_nmos w=740n l=0.13u
+XP1 m  I2 I0 VDD sg13_lv_pmos w=1.12u l=0.13u
+XN2 m  I2 I1 VSS sg13_lv_nmos w=740n l=0.13u
+XP2 m  Sb I1 VDD sg13_lv_pmos w=1.12u l=0.13u
+XP3 O0 m  VDD VDD sg13_lv_pmos w=1.12u l=0.13u
+XN3 O0 m  VSS VSS sg13_lv_nmos w=740n l=0.13u
+.ends
+"""
+
+TG_DIRECTIONS = {"I0": "input", "I1": "input", "I2": "input", "O0": "output"}
+
+
+def tg_mux():
+    return spice_parser.parse_spice(TG_MUX)[0]
+
+
+def test_a_pass_gate_cell_is_misread_without_a_declaration():
+    """The steered inputs sit on a channel terminal, so the topology calls them
+    outputs: only the select survives as an input, and the three pins it cannot
+    drive on its own are left with no level.  This is the failure the flow hit.
+    """
+    with pytest.raises(LogicError) as excinfo:
+        logic.truth_table(tg_mux())
+    message = str(excinfo.value)
+    assert "settle at no level" in message, message
+    assert "I0" in message and "I1" in message, message
+
+
+def test_a_declared_pass_gate_cell_solves_to_the_mux_it_is():
+    """O0 = !I0 when I2 = 0, !I1 when I2 = 1 -- steered through the TGs."""
+    table = logic.truth_table(tg_mux(), directions=TG_DIRECTIONS)
+    assert table.inputs == ("I0", "I1", "I2")
+    assert table.outputs == ("O0",)
+    for index in range(8):
+        bits = table.vector(index)
+        expected = 1 - (bits["I1"] if bits["I2"] else bits["I0"])
+        assert table.column("O0")[index] == expected, (
+            f"vector {bits} should give O0={expected}: {table.column('O0')}"
+        )
+
+
+def test_a_declared_pass_gate_cell_depends_on_all_three_inputs():
+    table = logic.truth_table(tg_mux(), directions=TG_DIRECTIONS)
+    assert table.support("O0") == ("I0", "I1", "I2")
+    assert table.sense("O0", "I2") == "non_unate"
+
+
+def test_a_declaration_may_not_call_a_gate_only_pin_an_output():
+    """A pin no device drives cannot be one, whatever the sidecar says."""
+    with pytest.raises(LogicError) as excinfo:
+        logic.truth_table(tg_mux(), directions={"I2": "output"})
+    assert "I2" in str(excinfo.value), excinfo.value
+
+
+def test_a_declaration_that_leaves_no_output_names_the_pins_it_blamed():
+    with pytest.raises(LogicError) as excinfo:
+        logic.truth_table(tg_mux(), directions={**TG_DIRECTIONS, "O0": "input"})
+    assert "O0" in str(excinfo.value), excinfo.value
+
+
+def test_a_declaration_naming_a_pin_the_cell_does_not_have_is_refused():
+    with pytest.raises(LogicError) as excinfo:
+        logic.truth_table(tg_mux(), directions={"I9": "input"})
+    assert "I9" in str(excinfo.value), excinfo.value
+
+
+def test_a_declaration_changes_nothing_for_a_static_cmos_cell(tool_dir):
+    """The topology settles those, so saying it out loud must be a no-op."""
+    subckt = pdk_subckt(tool_dir, "sg13g2_nand2_1")
+    plain = logic.truth_table(subckt)
+    said = logic.truth_table(
+        subckt, directions={"A": "input", "B": "input", "Y": "output"}
+    )
+    assert plain == said

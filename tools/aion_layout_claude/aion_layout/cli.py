@@ -49,7 +49,7 @@ import importlib
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: PASS, or WIN for :func:`cmd_compare`.
 EXIT_PASS = 0
@@ -895,6 +895,52 @@ def _flow_corners(mode: str, characterize: Any) -> Tuple[Any, ...]:
     return picked
 
 
+def _declared_pin_roles(
+    steps: Any, gds: Path
+) -> Optional[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
+    """Return ``(inputs, outputs)`` from the drawn cell, or None if it says nothing.
+
+    ``characterize`` otherwise reads the roles off the extracted topology: the
+    output is the port sitting on both a PMOS and an NMOS channel terminal.
+    That is sound for static CMOS, where every input is a gate, and wrong for
+    anything with a pass gate -- a transmission gate's steered inputs sit on a
+    channel terminal too, so all of them become candidates and the tie is
+    broken alphabetically.  The generator already wrote down which port is
+    which, and that is the same statement the LEF export publishes, so it is
+    what the characterizer should be told.
+    """
+    directions = steps.declared_directions(gds)
+    if not directions:
+        return None
+    ins = tuple(n for n, d in directions.items() if d == "INPUT")
+    outs = tuple(n for n, d in directions.items() if d == "OUTPUT")
+    if not ins or not outs:
+        return None
+    return ins, outs
+
+
+def _flow_directions(
+    steps: Any, gds: Path, netlist: Path, cell: str
+) -> dict[str, str]:
+    """Port directions for the published views: the drawn cell's, else the guess.
+
+    :func:`_directions_from_spice` infers them from the transistors, and that
+    inference cannot classify a pass gate -- see :func:`_declared_pin_roles`.
+    The generator wrote the answer down next to the GDS, so use it when it is
+    there and fall back only for a build that predates the sidecar.
+    """
+    declared = steps.declared_directions(gds) or {}
+    lowered = {
+        name: role.lower()
+        for name, role in declared.items()
+        if role.lower() in ("input", "output")
+    }
+    for name, role in declared.items():
+        if role.upper() in ("POWER", "GROUND", "INOUT"):
+            lowered[name] = "inout"
+    return lowered or _directions_from_spice(netlist, cell)
+
+
 def cmd_flow(args: argparse.Namespace) -> int:
     """Run the whole mechanical chain in order and stop at the first failure.
 
@@ -1009,6 +1055,15 @@ def cmd_flow(args: argparse.Namespace) -> int:
 
     # 4 -- characterize the candidate.
     stage("characterize (candidate)")
+    roles = _declared_pin_roles(steps, candidate_gds)
+    pin_args: Dict[str, Any] = {}
+    if roles is None:
+        say("  pin roles: read off the extracted topology; the build recorded "
+            "no port directions")
+    else:
+        pin_args = {"inputs": roles[0], "outputs": roles[1]}
+        say(f"  pin roles: inputs {', '.join(roles[0])}; "
+            f"outputs {', '.join(roles[1])} (as the drawn cell declares them)")
     candidate_char = characterize.characterize(
         candidate_pex,
         args.cell,
@@ -1016,6 +1071,7 @@ def cmd_flow(args: argparse.Namespace) -> int:
         area_um2=candidate_geometry.area_um2,
         corners=corners,
         jobs=args.jobs,
+        **pin_args,
     )
     if not _print_char(candidate_char):
         return _flow_stop("error")
@@ -1047,7 +1103,7 @@ def cmd_flow(args: argparse.Namespace) -> int:
         lib_files=list(candidate_char.lib_files),
         out_dir=final_dir,
         pex_spice=candidate_pex,
-        directions=_directions_from_spice(netlist, args.cell),
+        directions=_flow_directions(steps, candidate_gds, netlist, args.cell),
     )
     if not _print_views(views):
         # A rejected LEF is a property of the cell, not of the toolchain: the

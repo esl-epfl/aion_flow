@@ -397,12 +397,28 @@ class _PdkCell:
     notes: Tuple[str, ...]
 
 
+def _own_region(source: pya.Region) -> pya.Region:
+    """Return a copy of ``source`` that owns its shapes.
+
+    A ``pya.Region`` built from a ``RecursiveShapeIterator`` reads its polygons
+    back out of the ``pya.Layout`` it came from, and ``merged()`` hands that
+    lazy region straight back when there is nothing to merge -- a single shape
+    on the layer.  The moment the Layout is collected, such a region silently
+    reads as empty: not an exception, not a warning, just a mask layer that
+    quietly stops existing.  Copying the polygons into a fresh Region cuts the
+    tie to the Layout, so a caller may outlive the file it read.
+    """
+    out = pya.Region()
+    out.insert(source)
+    return out
+
+
 def _region_of(cell: pya.Cell, layout: pya.Layout, pair: Tuple[int, int]) -> pya.Region:
     """Return the merged polygon region on one layer/datatype pair."""
     index = layout.find_layer(*pair)
     if index is None:
         return pya.Region()
-    return pya.Region(cell.begin_shapes_rec(index)).merged()
+    return _own_region(pya.Region(cell.begin_shapes_rec(index)).merged())
 
 
 def _texts_of(cell: pya.Cell, layout: pya.Layout,
@@ -456,7 +472,7 @@ def _read_pdk_cell(cell: str, context: Path) -> _PdkCell:
         pair = (info.layer, info.datatype)
         if pair == _PRBOUNDARY_PAIR or info.datatype in (_PIN_DATATYPE, _LABEL_DATATYPE):
             continue
-        region = pya.Region(top.begin_shapes_rec(index)).merged()
+        region = _own_region(pya.Region(top.begin_shapes_rec(index)).merged())
         if not region.is_empty():
             geometry[pair] = region
     if _METAL1_PAIR not in geometry:

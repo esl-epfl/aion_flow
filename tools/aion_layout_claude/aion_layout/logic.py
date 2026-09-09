@@ -191,23 +191,60 @@ def _rails(subckt: Subckt) -> Tuple[str, str]:
     return vdd, vss  # type: ignore[return-value]
 
 
-def _classify_ports(subckt: Subckt, vdd: str, vss: str) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Split the signal pins into inputs and outputs, by what touches them.
+def _classify_ports(
+    subckt: Subckt,
+    vdd: str,
+    vss: str,
+    *,
+    declared: Optional[Mapping[str, str]] = None,
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Split the signal pins into inputs and outputs.
 
-    A pin a device only ever *gates* is an input; a pin wired to a channel
-    terminal is driven by the cell and is an output.  That is the same rule
-    :func:`aion_layout.cli._directions_from_spice` uses for the LEF, spelled
-    once more here because this module must not depend on a direction someone
-    else guessed.
+    Without ``declared`` the split is read off the topology: a pin a device
+    only ever *gates* is an input; a pin wired to a channel terminal is driven
+    by the cell and is an output.  That rule is exact for static CMOS and wrong
+    for anything with a pass gate, where a steered *input* arrives on a channel
+    terminal exactly as the output does -- on a transmission-gate mux every
+    signal pin looks like an output and the cell has no inputs left to sweep.
+
+    ``declared`` is the cell's own statement of which is which, keyed by pin
+    name with ``"input"``/``"output"`` values (case-insensitive); supplies may
+    appear and are ignored.  It is checked against the pins, never trusted
+    blind: a name it does not mention falls back to the topology rule, so a
+    partial map degrades instead of losing a port.
     """
     gates = {d.gate for d in subckt.devices}
     channels = {d.drain for d in subckt.devices} | {d.source for d in subckt.devices}
+    said = {
+        name: role.lower()
+        for name, role in (declared or {}).items()
+        if role.lower() in ("input", "output")
+    }
+    unknown = sorted(set(said) - set(subckt.pins))
+    if unknown:
+        raise LogicError(
+            f"{subckt.name}: the declared directions name {', '.join(unknown)}, "
+            f"which {subckt.name} does not have as a pin; its pins are: "
+            + ", ".join(subckt.pins)
+        )
     inputs: List[str] = []
     outputs: List[str] = []
     for pin in subckt.pins:
         if pin in (vdd, vss):
             continue
-        if pin in channels:
+        role = said.get(pin)
+        if role == "output" and pin not in channels:
+            raise LogicError(
+                f"{subckt.name}: {pin} is declared an output, but no device in the "
+                "cell has a drain or a source on it -- nothing drives it, so it "
+                "cannot be one. A declaration may settle what the topology leaves "
+                "open; it may not overrule what the topology settles"
+            )
+        if role == "input":
+            inputs.append(pin)
+        elif role == "output":
+            outputs.append(pin)
+        elif pin in channels:
             outputs.append(pin)
         elif pin in gates:
             inputs.append(pin)
@@ -216,15 +253,23 @@ def _classify_ports(subckt: Subckt, vdd: str, vss: str) -> Tuple[Tuple[str, ...]
                 f"{subckt.name} declares the pin {pin!r} that no device connects to; "
                 "a port nothing drives and nothing reads is not a port"
             )
+
+    def blamed(role: str) -> str:
+        """Name the declared pins of ``role``, so a bad map is not a mystery."""
+        named = [pin for pin in subckt.pins if said.get(pin) == role]
+        if not named:
+            return ""
+        return f" (the declared directions call {', '.join(named)} an {role})"
+
     if not outputs:
         raise LogicError(
             f"{subckt.name} has no output pin: no signal pin is wired to a drain or "
-            "a source, so the cell drives nothing"
+            "a source, so the cell drives nothing" + blamed("input")
         )
     if not inputs:
         raise LogicError(
             f"{subckt.name} has no input pin: no signal pin gates a device, so the "
-            "cell has a constant function and no timing arc"
+            "cell has a constant function and no timing arc" + blamed("output")
         )
     if len(inputs) > MAX_INPUTS:
         raise LogicError(
@@ -267,12 +312,22 @@ def _adjacency(
     return adjacency
 
 
-def _rails_reached(start: str, adjacency: Mapping[str, List[str]], rails: Set[str]) -> Set[str]:
-    """Which rails ``start`` is tied to; a rail is a terminal, never a waypoint.
+def _sources_reached(
+    start: str, adjacency: Mapping[str, List[str]], sources: Set[str]
+) -> Set[str]:
+    """Which sources ``start`` is tied to; a source is a terminal, never a waypoint.
 
     Walking *through* VDD would find a path out of every pull-up network into
     every other one, and report a node as tied to both rails whenever any two
     gates in the cell happened to be conducting.
+
+    ``sources`` is the two rails plus the cell's input pins.  An input belongs
+    there for the same reason a rail does: it is held at a level by something
+    outside the cell, so a channel path that arrives at one has found a driver
+    and has no business continuing through it.  On a cell whose inputs are all
+    gates this is inert -- no channel path can reach a pin that sits on no
+    channel terminal -- and on a pass gate it is the whole difference between a
+    solvable node and one that "settles at no level".
     """
     seen = {start}
     stack = [start]
@@ -283,7 +338,7 @@ def _rails_reached(start: str, adjacency: Mapping[str, List[str]], rails: Set[st
             if neighbour in seen:
                 continue
             seen.add(neighbour)
-            if neighbour in rails:
+            if neighbour in sources:
                 hit.add(neighbour)
                 continue
             stack.append(neighbour)
@@ -296,29 +351,36 @@ def _solve_vector(
     unresolved: List[str],
     vdd: str,
     vss: str,
+    sources: Set[str],
 ) -> Dict[str, int]:
-    """Give every node in ``unresolved`` a level, or say why none can be given."""
-    rails = {vdd, vss}
+    """Give every node in ``unresolved`` a level, or say why none can be given.
+
+    ``sources`` are the nodes held at a level from outside the network being
+    solved: the two rails, and the input pins.  A node takes a level when every
+    source it could possibly reach agrees on one, which for a complementary
+    gate is the familiar "tied to VDD and no path to VSS" and for a
+    transmission gate is "tied to whatever the pass gate is steering".
+    """
     pending = list(unresolved)
     while pending:
         sure = _adjacency(subckt.devices, values, definite=True, subckt_name=subckt.name)
         maybe = _adjacency(subckt.devices, values, definite=False, subckt_name=subckt.name)
         progressed = False
         for node in list(pending):
-            tied = _rails_reached(node, sure, rails)
-            could = _rails_reached(node, maybe, rails)
-            if vdd in tied and vss in tied:
+            # Every source is a rail or an input pin, so all of them already
+            # have a level in ``values``: it is the level that matters here,
+            # not which source carries it.
+            tied = {values[s] for s in _sources_reached(node, sure, sources)}
+            could = {values[s] for s in _sources_reached(node, maybe, sources)}
+            if len(tied) > 1:
                 raise LogicError(
-                    f"{subckt.name}: {node} is tied to both {vdd} and {vss} at once for "
-                    f"the input vector {_spell(values, subckt)}; whatever SPICE settles "
+                    f"{subckt.name}: {node} is tied to both a 0 and a 1 at once for the "
+                    f"input vector {_spell(values, subckt)}; whatever SPICE settles "
                     "on there is a resistive divider, not a logic level"
                 )
-            if vdd in tied and vss not in could:
-                values[node] = 1
-            elif vss in tied and vdd not in could:
-                values[node] = 0
-            else:
+            if len(tied) != 1 or not could <= tied:
                 continue
+            values[node] = tied.pop()
             pending.remove(node)
             progressed = True
         if not progressed:
@@ -337,19 +399,27 @@ def _spell(values: Mapping[str, int], subckt: Subckt) -> str:
     return " ".join(f"{pin}={values[pin]}" for pin in subckt.pins if pin in values)
 
 
-def truth_table(subckt: Subckt) -> TruthTable:
+def truth_table(
+    subckt: Subckt, *, directions: Optional[Mapping[str, str]] = None
+) -> TruthTable:
     """Solve ``subckt`` over every input vector.
 
     Every net that gates a device has to be resolved on the way, not only the
     output pins: in a merged AION cell the gate of the second stage is the
     drain of the first, and there is no order to evaluate them in that does not
-    discover it.
+    discover it.  A pass gate adds a second reason -- the node a transmission
+    gate steers is neither a pin nor a gate of anything the topology can order
+    -- and it is resolved the same way, by repeating until nothing moves.
+
+    ``directions`` names each pin ``"input"`` or ``"output"``.  Pass it for any
+    cell whose inputs are not all gate terminals: see :func:`_classify_ports`.
     """
     vdd, vss = _rails(subckt)
-    inputs, outputs = _classify_ports(subckt, vdd, vss)
+    inputs, outputs = _classify_ports(subckt, vdd, vss, declared=directions)
     gated = {d.gate for d in subckt.devices}
     internal = sorted(gated - set(inputs) - {vdd, vss} - set(outputs))
     wanted = list(outputs) + internal
+    sources = {vdd, vss} | set(inputs)
 
     rows: List[Tuple[int, ...]] = []
     last = len(inputs) - 1
@@ -357,7 +427,7 @@ def truth_table(subckt: Subckt) -> TruthTable:
         values: Dict[str, int] = {vdd: 1, vss: 0}
         for j, name in enumerate(inputs):
             values[name] = (index >> (last - j)) & 1
-        solved = _solve_vector(subckt, values, wanted, vdd, vss)
+        solved = _solve_vector(subckt, values, wanted, vdd, vss, sources)
         rows.append(tuple(solved[out] for out in outputs))
 
     return TruthTable(inputs=inputs, outputs=outputs, rows=tuple(rows))

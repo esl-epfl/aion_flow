@@ -42,7 +42,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import verification as _v
 from .metrics import (
@@ -233,6 +233,30 @@ def declared_ports(gds: Path) -> Optional[List[Tuple[str, str, float, float, flo
         except (KeyError, TypeError, ValueError):
             return None
     return ports
+
+
+def declared_directions(gds: Path) -> Optional[Dict[str, str]]:
+    """Return ``{port: direction}`` as the generator recorded it, or None.
+
+    The directions are the cell's own statement of what it drives and what it
+    is driven by, and they are the only statement there is: a ``.subckt`` line
+    does not carry them, and inferring them from the transistors works only for
+    a cell whose every input is a gate terminal.  A transmission gate breaks
+    that -- its pass inputs sit on a channel terminal exactly as the output
+    does -- so a caller that has this sidecar must prefer it to a guess.
+    """
+    sidecar = Path(str(gds) + PORTS_SUFFIX)
+    try:
+        raw = json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        return None
+    directions: Dict[str, str] = {}
+    for entry in raw:
+        try:
+            directions[str(entry["name"])] = str(entry["direction"])
+        except (KeyError, TypeError):
+            return None
+    return directions or None
 
 
 def _gds_top_cells(gds: Path) -> List[str]:

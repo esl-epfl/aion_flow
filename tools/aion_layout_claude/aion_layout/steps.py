@@ -45,14 +45,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import verification as _v
+from .exporters import ExportError, check_lef, export_lef
 from .metrics import (
-    POWER_PIN_NAMES,
     ROW_HEIGHT_UM,
     CellGeometry,
     MetricsError,
     drawn_shapes,
     gds_boundary,
-    port_access_problems,
     tap_contact_problems,
 )
 from .runner import (
@@ -186,10 +185,10 @@ if cell is None:
 Path(out_gds).parent.mkdir(parents=True, exist_ok=True)
 cell.write_gds(out_gds)
 
-# The ports go out beside the GDS so that verify can grade them against the
-# routing track grid.  They do not survive the GDS round trip as rectangles --
-# write_gds keeps only a label at each port's centre -- and the caller runs in
-# a different process, so the sidecar is how the geometry gets back.
+# The ports go out beside the GDS so that the exporter can type each pin with
+# the direction the generator declared.  They do not survive the GDS round trip
+# -- write_gds keeps only a label at each port's centre -- and the caller runs
+# in a different process, so the sidecar is how they get back.
 import json
 json.dump(
     [
@@ -789,6 +788,59 @@ def _grade_lvs(report: Optional[LvsReport], errors: List[str],
         failures.append(detail)
 
 
+#: Where :func:`verify` writes the abstract it grades, under the work directory.
+#: A directory of its own because :func:`exporters.export_lef` quarantines a
+#: refused LEF as ``<cell>.lef.rejected`` beside it, and in a publish directory
+#: that name means "do not place this cell".
+ABSTRACT_DIR = "abstract"
+
+
+def abstract_problems(
+    gds: Path, cell_name: str, work: Path
+) -> Tuple[List[str], List[str]]:
+    """Write the LEF the router will read, grade it, return ``(errors, failures)``.
+
+    It is the same magic ``lef write`` and the same :func:`exporters.check_lef`
+    that publishing runs, so the drawing loop and the publish gate cannot
+    disagree about a cell.  They used to: ``verify`` graded pin access off the
+    declared port rectangles and the drawn metal, which cannot say which net a
+    shape belongs to, while aion_chip's publish gate graded the LEF by a
+    different rule.  ``AION_mux2_0`` passed one, failed the other, and never
+    reached implementation/cells/ -- with nothing in the loop to say why.
+
+    A LEF magic could not write at all is an ERROR -- nothing is known.  One it
+    wrote and :func:`export_lef` then refused (it leaves ``.lef.rejected``), or
+    one with problems, is a FAIL: that is a statement about the cell.  The LEF
+    is written without pin directions, which no check here reads.
+    """
+    errors: List[str] = []
+    failures: List[str] = []
+    lef = work / ABSTRACT_DIR / f"{cell_name}.lef"
+    # A quarantine an earlier verify left behind would make this run's failure
+    # to write any LEF read as a refusal of the cell.
+    rejected = lef.with_suffix(lef.suffix + ".rejected")
+    if rejected.is_file():
+        rejected.unlink()
+    try:
+        export_lef(gds, cell_name, lef)
+    except ExportError as exc:
+        refused = rejected.is_file()
+        (failures if refused else errors).append(
+            f"the abstract (LEF) of {cell_name} "
+            f"{'was refused' if refused else 'could not be written'}: "
+            f"{_flatten(exc, 400)}"
+        )
+        return errors, failures
+    try:
+        check = check_lef(lef, cell_name)
+    except ExportError as exc:
+        errors.append(f"the abstract (LEF) of {cell_name} could not be graded: "
+                      f"{_flatten(exc, 300)}")
+        return errors, failures
+    failures.extend(f"abstract (LEF): {problem}" for problem in check.problems)
+    return errors, failures
+
+
 def verify(
     module_path: os.PathLike[str] | str,
     cell_name: str,
@@ -802,7 +854,8 @@ def verify(
     The layout is ``<work_dir>/<cell_name>.gds`` and the reports land in
     ``<work_dir>/drc`` and ``<work_dir>/lvs`` -- both runners wipe the directory
     they are given, which is why they are given subdirectories and not the work
-    directory that holds the GDS.
+    directory that holds the GDS.  The LEF graded by :func:`abstract_problems`
+    lands in ``<work_dir>/abstract``.
 
     A failed build stops the chain, because every later step reads the file it
     did not write.  After that the chain runs to the end even when a step
@@ -865,8 +918,9 @@ def verify(
     # What a cell does to its neighbours is DRC-clean, LVS-clean and row-legal
     # on its own, and then takes step 7 down an hour later -- DRT-0073 in pin
     # access, or thousands of Cnt.b violations once the rails abut.  Neither is
-    # visible in a cell by itself, so both are graded here from the geometry,
-    # inside the drawing loop where they can still be fixed.
+    # visible in a cell by itself, so both are graded here, inside the drawing
+    # loop where they can still be fixed: the rail taps from the drawn geometry,
+    # pin access from the abstract below.
     drawn = None
     try:
         drawn = drawn_shapes(gds, cell_name=cell_name)
@@ -877,28 +931,19 @@ def verify(
             f"{_flatten(exc, 200)}"
         )
 
-    ports = declared_ports(gds)
-    if ports is None:
-        errors.append(
-            f"the ports of {cell_name} could not be read from "
-            f"{gds.name}{PORTS_SUFFIX}, so they were not checked against the "
-            "routing track grid; rebuild the cell"
-        )
-    else:
-        signal_ports = [
-            port for port in ports
-            if port[0].upper() not in POWER_PIN_NAMES
-        ]
-        for problem in port_access_problems(signal_ports, drawn):
-            # 400, like the DRC and LVS reasons: these end with what to do
-            # about the problem, and a reason truncated before that is a
-            # reason the model cannot act on.
-            failures.append(_flatten(problem, 400))
-
     if drawn is not None:
         height_nm = (geometry.height_um if geometry else ROW_HEIGHT_UM) * 1000.0
         for problem in tap_contact_problems(drawn.get("Cont", ()), height_nm):
             failures.append(_flatten(problem, 400))
+
+    # Pin access is graded on the LEF magic writes, not on the drawn metal: only
+    # PORT and OBS say which shapes are the pin's own net, and the LEF is what
+    # the publish gate and the router both read. 600, because these reasons end
+    # with what to do about the problem, and one cut off before that is a
+    # reason the model cannot act on.
+    abstract_errors, abstract_failures = abstract_problems(gds, cell_name, work)
+    errors.extend(abstract_errors)
+    failures.extend(_flatten(problem, 600) for problem in abstract_failures)
 
     if errors:
         result = RESULT_ERROR
@@ -1057,6 +1102,7 @@ __all__ = [
     "StepError",
     "StepResult",
     "Verdict",
+    "abstract_problems",
     "build_gds",
     "drc",
     "klayout_table_logs",

@@ -609,7 +609,9 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     pex = None
     if args.pex or args.characterize:
         characterize = _load("characterize")
-        pex = characterize.run_pex(result.gds, name, out_dir / "pex")
+        pex = characterize.run_pex(
+            result.gds, name, out_dir / "pex", mode=args.pex_mode
+        )
         say(f"pex: {pex}")
         ok = ok and _exists(pex)
 
@@ -622,6 +624,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             name,
             out_dir / "char",
             area_um2=result.geometry.area_um2,
+            driver=_resolve_driver(args, characterize),
         )
         ok = _print_char(char) and ok
 
@@ -639,6 +642,8 @@ def _print_char(result: Any) -> bool:
     say(f"characterized {result.cell} from {result.spice_used}")
     say(f"  area: {result.area_um2} um^2")
     say(f"  corners: {', '.join(c.name for c in result.corners)}")
+    # Nothing in a .lib says which stimulus produced it, so it is said here.
+    say(f"  stimulus: {result.driver.describe() if result.driver else 'ideal ramp'}")
     ok = bool(result.lib_files)
     if not ok:
         say("  no Liberty files were produced")
@@ -663,6 +668,74 @@ def _parse_corner(spec: str, corner_cls: Any) -> Any:
         return corner_cls(name=name, section=section, vdd=float(vdd), temp=float(temp))
     except ValueError as exc:
         raise CliError(f"corner {spec!r} has a non-numeric VDD or TEMP: {exc}") from exc
+
+
+def _add_driver_args(p: argparse.ArgumentParser) -> None:
+    """The ``--driver-*`` flags, shared by every subcommand that writes Liberty.
+
+    The driver must be **non-inverting**.  ``aion_char`` feeds it a ramp that
+    always rises first and derives the expected output edge from the cell's own
+    unateness; nothing accounts for a driver that flips the pin, so an
+    inverting one inverts every expected level and the run fails as "the output
+    still had not settled" with the output pinned at the opposite rail.  Hence
+    the defaults are a buffer's pins, ``A -> X``.
+    """
+    p.add_argument(
+        "--driver-cell",
+        metavar="NAME",
+        help="drive the pin under test with this NON-INVERTING cell instead "
+             "of an ideal ramp, the way vendor libraries are characterized "
+             "(e.g. sg13g2_buf_2; an inverter breaks the run). Use it for any "
+             "cell with a pass gate on an input "
+             "path: an ideal ramp is a zero-impedance driver, which is the "
+             "most optimistic case that exists for one. Its .subckt is taken "
+             "from the PDK standard-cell netlist",
+    )
+    p.add_argument(
+        "--driver-input", metavar="PIN", default="A",
+        help="input pin of --driver-cell (default: A)",
+    )
+    p.add_argument(
+        "--driver-output", metavar="PIN", default="X",
+        help="output pin of --driver-cell (default: X, the sg13g2 buffers' "
+             "output)",
+    )
+
+
+PEX_MODES = {1: "C-decoupled", 2: "C-coupled", 3: "full RC"}
+
+
+def _add_pex_mode_arg(p: argparse.ArgumentParser) -> None:
+    """``--pex-mode``, for every subcommand that extracts before it measures.
+
+    Mode 3 stays the default: wire resistance inside a hand-drawn cell is
+    exactly what a small layout can get wrong, and a C-only extraction cannot
+    show it.  Mode 2 exists here because mode 3 runs Magic's ``extresist``,
+    which splits a resistive net into renamed segments and can leave the
+    ``.subckt`` port bound to none of them -- see
+    :func:`aion_layout.characterize._require_ports_connected`.  When that
+    happens on one cell and not another, dropping both sides to mode 2 is a
+    measurement that is at least the same on both.
+    """
+    p.add_argument(
+        "--pex-mode", type=int, default=3, choices=(1, 2, 3),
+        help="parasitic extraction mode: 1 C-decoupled, 2 C-coupled, "
+             "3 full RC (default). Applies to every netlist the command "
+             "extracts, so the two sides of a comparison always match",
+    )
+
+
+def _resolve_driver(args: argparse.Namespace, characterize: Any) -> Any:
+    """A ``characterize.Driver``, or None for the default ideal ramp."""
+    cell = getattr(args, "driver_cell", None)
+    if not cell:
+        return None
+    try:
+        return characterize.Driver(
+            cell=cell, in_pin=args.driver_input, out_pin=args.driver_output
+        )
+    except characterize.CharacterizeError as exc:
+        raise CliError(str(exc)) from exc
 
 
 def cmd_characterize(args: argparse.Namespace) -> int:
@@ -702,6 +775,7 @@ def cmd_characterize(args: argparse.Namespace) -> int:
         corners=corners,
         jobs=args.jobs,
         verify=not args.no_verify,
+        driver=_resolve_driver(args, characterize),
     )
     return _step_verdict("characterize", _print_char(result))
 
@@ -1000,7 +1074,12 @@ def cmd_flow(args: argparse.Namespace) -> int:
 
     # 2 -- parasitics for the candidate.
     stage("PEX (candidate)")
-    candidate_pex = characterize.run_pex(candidate_gds, args.cell, build_dir / "pex")
+    # One mode for both sides, for the reason the driver is resolved once: two
+    # netlists extracted differently are not two measurements of the same thing.
+    say(f"  extraction: mode {args.pex_mode} ({PEX_MODES[args.pex_mode]}), both sides")
+    candidate_pex = characterize.run_pex(
+        candidate_gds, args.cell, build_dir / "pex", mode=args.pex_mode
+    )
     say(f"pex: {candidate_pex}")
     if not _exists(candidate_pex):
         return _flow_stop("error")
@@ -1047,14 +1126,24 @@ def cmd_flow(args: argparse.Namespace) -> int:
             return _flow_stop("fail")
 
         baseline_pex = characterize.run_pex(
-            baseline_gds, baseline_cell, base_dir / "pex"
+            baseline_gds, baseline_cell, base_dir / "pex", mode=args.pex_mode
         )
         say(f"pex: {baseline_pex}")
         if not _exists(baseline_pex):
             return _flow_stop("error")
 
     # 4 -- characterize the candidate.
+    #
+    # The driver is resolved once and used for BOTH sides.  Step 7 compares two
+    # Liberty files on delay, and delay measured against a real driver is not
+    # the same quantity as delay measured against an ideal ramp -- a candidate
+    # driven by a real cell and a baseline driven by a ramp would be a rigged
+    # comparison, in the direction that makes the hand-designed cell look worse
+    # for a reason that has nothing to do with the cell.
     stage("characterize (candidate)")
+    driver = _resolve_driver(args, characterize)
+    if driver is not None:
+        say(f"  stimulus: driven by {driver.describe()}, both sides")
     roles = _declared_pin_roles(steps, candidate_gds)
     pin_args: Dict[str, Any] = {}
     if roles is None:
@@ -1071,6 +1160,7 @@ def cmd_flow(args: argparse.Namespace) -> int:
         area_um2=candidate_geometry.area_um2,
         corners=corners,
         jobs=args.jobs,
+        driver=driver,
         **pin_args,
     )
     if not _print_char(candidate_char):
@@ -1087,6 +1177,7 @@ def cmd_flow(args: argparse.Namespace) -> int:
             area_um2=baseline_geometry.area_um2,
             corners=corners,
             jobs=args.jobs,
+            driver=driver,
         )
         if not _print_char(baseline_char):
             return _flow_stop("error")
@@ -1318,6 +1409,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--characterize", action="store_true", help="also characterize it (implies --pex)"
     )
+    _add_driver_args(p)
+    _add_pex_mode_arg(p)
     p.set_defaults(handler=cmd_baseline)
 
     # -- characterize ------------------------------------------------------
@@ -1348,6 +1441,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--inputs", help="comma-separated input pins, if not inferable")
     p.add_argument("--outputs", help="comma-separated output pins, if not inferable")
+    _add_driver_args(p)
     p.set_defaults(handler=cmd_characterize)
 
     # -- compare -----------------------------------------------------------
@@ -1417,6 +1511,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="build and characterize the cell only; no comparison",
     )
+    _add_driver_args(p)
+    _add_pex_mode_arg(p)
     p.set_defaults(handler=cmd_flow)
 
     return parser

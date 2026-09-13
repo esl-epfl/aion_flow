@@ -340,44 +340,39 @@ def _write(tmp_path, text):
     return lef
 
 
-def test_a_metal1_pin_needs_a_horizontal_track(tmp_path):
-    """Metal1 is DIRECTION HORIZONTAL: its wires sit at y = n * 0.42 um.
+def test_the_tracks_a_pin_covers_are_reported_not_required(tmp_path):
+    """Metal1 routes along y = n * 0.42 um, and a port no longer has to cross a line.
 
-    So the y span decides, and the x span is free -- a Metal1 wire can stop at
-    any x.  Getting this backwards would pass the pin that DRT-0073 rejects and
-    reject four that route.
+    TritonRoute pin access reaches a Metal1 port 10 nm or 40 nm off the track
+    grid whenever the via has room: it sits on the nearest track or half track
+    with its enclosure overlapping the port.  This check used to reject every
+    such port.  The lines a port covers are still reported -- a port that
+    crosses one is the easy case for the router, not the only one.
     """
     on = ("LAYER Metal1 ;", "RECT 0.975 1.450 1.255 1.790 ;")   # y 1.45..1.79 > 1.68
     off = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.250 ;")  # between 0.84 and 1.26
 
     good = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", on))))
-    assert good.ok, (
-        "y 1.45..1.79 contains the track at y = 1.68; x being off-grid is "
-        f"irrelevant on a horizontal layer: {good.problems}"
-    )
+    assert good.ok, good.problems
     assert good.reachable["I0"] == ("Metal1 y",)
 
-    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
-    assert not bad.ok, (
-        "y 1.09..1.25 falls between the tracks at 0.84 and 1.26 -- this is the "
-        "exact geometry that aborted detailed routing"
+    free = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
+    assert free.ok, (
+        "nothing of another net stops a via from overlapping this port, so the "
+        f"router reaches it off the grid: {free.problems}"
     )
-    assert bad.reachable["O0"] == ()
+    assert free.reachable["O0"] == (), "and it is still reported as covering no line"
 
 
-def test_a_metal2_pin_needs_a_vertical_track(tmp_path):
-    """Metal2 is DIRECTION VERTICAL, so the axis flips to x = n * 0.48 um."""
-    # Overlapping the Metal1 failure above in y, but on Metal2 y only has to be
-    # wide enough for a via to land -- which line it falls on no longer matters.
+def test_a_metal2_pin_reports_vertical_tracks(tmp_path):
+    """Metal2 is DIRECTION VERTICAL, so the axis of the lines flips to x = n * 0.48 um."""
     on = ("LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.390 ;")   # x 2.15..2.55 > 2.40
     off = ("LAYER Metal2 ;", "RECT 2.500 1.090 2.850 1.390 ;")  # between 2.40 and 2.88
 
     good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", on))))
-    assert good.ok, f"x 2.15..2.55 contains the track at x = 2.40: {good.problems}"
-    assert good.reachable["O0"] == ("Metal2 x",)
-
-    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
-    assert not bad.ok, "x 2.50..2.85 falls between the tracks at 2.40 and 2.88"
+    assert good.ok and good.reachable["O0"] == ("Metal2 x",), good
+    free = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", off))))
+    assert free.ok and free.reachable["O0"] == (), free
 
 
 def test_a_pin_passes_on_any_one_of_its_layers(tmp_path):
@@ -386,65 +381,213 @@ def test_a_pin_passes_on_any_one_of_its_layers(tmp_path):
             "LAYER Metal2 ;", "RECT 2.150 1.090 2.550 1.390 ;")   # on grid in x
     access = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", both))))
 
-    assert access.ok, (
-        "the Metal2 rect contains x = 2.40, so the router has a landing site "
-        f"even though the Metal1 rect has none: {access.problems}"
-    )
+    assert access.ok, f"either rect is a way in: {access.problems}"
     assert access.reachable["O0"] == ("Metal2 x",)
 
 
-def test_a_port_on_a_track_still_needs_room_for_the_via(tmp_path):
-    """Covering a track is half of it: the wire also has to get down to the port.
+def test_a_thin_port_is_reached_by_a_via_that_overhangs_it(tmp_path):
+    """0.21 um across is not a floor: the via's enclosure may run off the port.
 
-    This is AION_a21oi_nor2_1/O0 as first drawn.  Its y span 1.09..1.27 does
-    contain the track at 1.26, so the track rule passed it and detailed routing
-    still aborted -- 0.18 um is under the 0.21 um short side of a Via1 landing
-    pad, so there is nowhere to put the via.  0.21 um is the whole difference.
+    TritonRoute reaches a 0.18 um Metal1 port when no other net's Metal1 is
+    within 0.18 um of where the overhanging enclosure goes.  It cannot reach the
+    same port with another net's Metal1 0.18 um above and below it, because then
+    every enclosure that overlaps the port crowds one of them -- and the reason
+    has to say it is Metal1 that closes the door, not Metal2.
     """
     thin = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.270 ;")   # 0.40 x 0.18
-    grown = ("LAYER Metal1 ;", "RECT 2.150 1.090 2.550 1.300 ;")  # 0.40 x 0.21
+    free = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", thin))))
+    assert free.ok, free.problems
 
-    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", thin))))
-    assert not bad.ok, "0.18 um across cannot hold a via, on grid or not"
-    assert "no via can land on it" in bad.problems[0]
-    assert bad.reachable["O0"] == ("Metal1 y",), (
-        "the port does cover a track -- that is what makes it worth catching here"
+    boxed = (
+        "LAYER Metal1 ;",
+        "RECT 2.000 1.450 2.700 1.540 ;",   # 0.18 um above the port
+        "RECT 2.000 0.820 2.700 0.910 ;",   # 0.18 um below it
     )
-
-    good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", grown))))
-    assert good.ok, f"0.21 um is exactly a landing pad: {good.problems}"
+    bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", thin), obs=boxed)))
+    assert not bad.ok
+    assert "has no via access" in bad.problems[0]
+    assert "Metal1 enclosure cannot overlap the port" in bad.problems[0], bad.problems
 
 
 def test_a_landing_pad_may_hang_off_the_end_of_the_port(tmp_path):
-    """Only the pad's short side has to fit; the long side runs along the wire.
+    """sg13g2_nand4_1/A: the PDK's own port is narrower than the via pad.
 
-    sg13g2_nand4_1/A is the PDK's own witness: its widest port RECT is 0.275 um
-    against a 0.29 um pad, and it routes, because the overhang lands on the
-    rest of the net rather than on nothing.  Requiring the whole pad to sit
-    inside the port would reject a shipping standard cell.
+    Its widest port RECT is 0.275 um against a 0.29 um pad, and it routes,
+    because the overhang lands on nothing of another net.
     """
     narrow = ("LAYER Metal1 ;", "RECT 1.965 1.590 2.240 1.850 ;")  # 0.275 x 0.26
     access = lef_pin_access(_write(tmp_path, _pin_lef(("A", "SIGNAL", narrow))))
-    assert access.ok, f"0.26 um across clears the 0.21 um short side: {access.problems}"
+    assert access.ok, access.problems
 
 
 def test_an_obstruction_over_the_port_leaves_the_via_nowhere_to_go(tmp_path):
     """A port whose own strap was written out as an obstruction is unroutable.
 
-    This is AION_nand2_o21ai_0/O0.  The cell routes its output up to Metal2,
-    but only the Metal1 end carries the label, so ``lef write -pinonly`` put
-    the strap in OBS -- sitting exactly on top of the pin, where the via would
-    have gone.  Moving that same rect into the port is the fix.
+    This is AION_nand2_o21ai_0/O0 as first drawn.  The cell routes its output up
+    to Metal2, but the strap went to OBS -- sitting across the pin, wider than
+    any overhang can escape.  Moving that same rect into the port is the fix.
     """
     port = ("LAYER Metal1 ;", "RECT 1.790 0.960 2.050 1.270 ;")
     strap = ("LAYER Metal2 ;", "RECT 1.835 0.950 2.035 2.650 ;")
 
     bad = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", port), obs=strap)))
-    assert not bad.ok, "the Metal2 obstruction covers every via landing"
-    assert "every via landing is covered" in bad.problems[0]
+    assert not bad.ok, "the Metal2 obstruction is within 0.21 um of every pad"
+    assert "has no via access" in bad.problems[0]
+    assert "Metal2 pad" in bad.problems[0], bad.problems
+    assert "DRT-0073" in bad.problems[0]
 
     good = lef_pin_access(_write(tmp_path, _pin_lef(("O0", "SIGNAL", port + strap))))
     assert good.ok, f"labelled as part of the port, the strap is access: {good.problems}"
+
+
+def test_a_via_slides_off_the_port_to_clear_another_nets_strap(tmp_path):
+    """AION_mux2_0/I0: refused by this check, and routed by TritonRoute anyway.
+
+    Another net's Metal2 strap runs 5 nm right of the Metal1 port, so no via
+    centred over the port keeps its pad 0.21 um clear -- which is all this check
+    used to try, and why the cell never reached implementation/cells/.  Detailed
+    routing connected all 126 instances with 0 DRC errors: a Via1_YY 60 nm left
+    of the port, its cut overlapping the port by 35 nm, its pad 0.265 um from
+    the strap.  Wall off the free Metal1 it hangs onto and pin access finds no
+    access point, so neither may this.
+    """
+    port = ("LAYER Metal1 ;", "RECT 2.220 1.450 2.520 1.790 ;")
+    strap = ("LAYER Metal2 ;", "RECT 2.525 0.620 2.725 2.710 ;")
+    reached = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", port), obs=strap)))
+    assert reached.ok, reached.problems
+
+    wall = ("LAYER Metal1 ;", "RECT 1.900 1.450 2.000 1.790 ;")
+    blocked = lef_pin_access(
+        _write(tmp_path, _pin_lef(("I0", "SIGNAL", port), obs=strap + wall))
+    )
+    assert not blocked.ok
+    assert "has no via access" in blocked.problems[0], blocked.problems
+
+
+def test_metal2_on_both_sides_has_to_leave_the_pad_its_spacing(tmp_path):
+    """A second strap closes the escape: the pad needs 0.21 um from each.
+
+    Calibrated against pin access on AION_mux2_0/I0 with a strap added on the
+    left: reached with it ending at x = 1.80, no access point at 1.95.
+    """
+    port = ("LAYER Metal1 ;", "RECT 2.220 1.450 2.520 1.790 ;")
+    right = ("LAYER Metal2 ;", "RECT 2.525 0.620 2.725 2.710 ;")
+    far = ("RECT 1.600 0.620 1.800 2.710 ;",)
+    near = ("RECT 1.750 0.620 1.950 2.710 ;",)
+
+    reached = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", port), obs=right + far)))
+    assert reached.ok, reached.problems
+
+    blocked = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", port), obs=right + near)))
+    assert not blocked.ok
+    assert "Metal2 pad" in blocked.problems[0], blocked.problems
+
+
+def test_another_pins_metal_is_another_net(tmp_path):
+    """A neighbouring pin blocks a via exactly as an obstruction does."""
+    port = ("LAYER Metal1 ;", "RECT 2.220 1.450 2.520 1.790 ;")
+    over = ("LAYER Metal2 ;", "RECT 2.170 0.620 2.570 2.710 ;")   # crosses x = 2.40
+
+    access = lef_pin_access(
+        _write(tmp_path, _pin_lef(("I0", "SIGNAL", port), ("I1", "SIGNAL", over)))
+    )
+    assert len(access.problems) == 1 and "PIN I0" in access.problems[0], access.problems
+
+    own = lef_pin_access(_write(tmp_path, _pin_lef(("I0", "SIGNAL", port + over))))
+    assert own.ok, f"the same Metal2 in I0's own port is a landing: {own.problems}"
+
+
+#: AION_mux2i_1 as published to implementation/pdk_extension/, GatPoly dropped.
+_MUX2I_1 = """\
+MACRO AION_mux2i_1
+  CLASS CORE ;
+  SIZE 3.360 BY 3.780 ;
+  SITE CoreSite ;
+  PIN I2
+    PORT
+      LAYER Metal1 ;
+        RECT 1.040 1.970 2.930 2.130 ;
+        RECT 1.040 1.450 1.320 1.970 ;
+        RECT 2.650 1.450 2.930 1.970 ;
+    END
+  END I2
+  PIN I0
+    PORT
+      LAYER Metal1 ;
+        RECT 2.915 2.310 3.270 2.910 ;
+        RECT 3.110 1.250 3.270 2.310 ;
+        RECT 1.875 1.090 3.270 1.250 ;
+        RECT 1.875 0.590 2.175 1.090 ;
+    END
+  END I0
+  PIN I1
+    PORT
+      LAYER Metal1 ;
+        RECT 1.875 2.910 2.175 3.230 ;
+        RECT 1.895 2.310 2.155 2.910 ;
+        RECT 2.880 0.590 3.210 0.910 ;
+      LAYER Metal2 ;
+        RECT 1.875 2.985 3.145 3.185 ;
+        RECT 2.945 0.660 3.145 2.985 ;
+    END
+  END I1
+  PIN O0
+    PORT
+      LAYER Metal1 ;
+        RECT 0.180 2.310 0.545 2.910 ;
+        RECT 0.180 0.910 0.340 2.310 ;
+        RECT 0.180 0.590 0.545 0.910 ;
+    END
+  END O0
+  PIN VDD
+    USE POWER ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.000 3.560 3.360 4.000 ;
+        RECT 0.795 2.310 1.055 3.560 ;
+    END
+  END VDD
+  PIN VSS
+    USE GROUND ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.795 0.220 1.055 0.880 ;
+        RECT 0.000 -0.220 3.360 0.220 ;
+    END
+  END VSS
+  OBS
+      LAYER Metal1 ;
+        RECT 1.285 2.310 1.585 2.910 ;
+        RECT 2.385 2.310 2.685 2.910 ;
+        RECT 0.520 1.450 0.820 1.790 ;
+        RECT 1.900 1.450 2.420 1.790 ;
+        RECT 1.285 0.590 1.585 0.910 ;
+        RECT 2.385 0.590 2.685 0.910 ;
+      LAYER Metal2 ;
+        RECT 0.570 0.450 0.770 1.770 ;
+        RECT 1.335 1.720 1.535 2.750 ;
+        RECT 1.335 1.520 2.200 1.720 ;
+        RECT 1.335 0.660 1.535 1.520 ;
+        RECT 2.435 0.450 2.635 2.595 ;
+        RECT 0.570 0.250 2.635 0.450 ;
+  END
+END AION_mux2i_1
+"""
+
+
+def test_the_select_pin_that_aborted_detailed_routing_is_still_rejected(tmp_path):
+    """AION_mux2i_1/I2: 'DRT-0073 No access point', in a PnR run and in pin access.
+
+    Both pads and the strap joining them are hemmed in by other nets' Metal2
+    risers and Metal1 fingers.  Relaxing the rule for the pins the router does
+    reach must not relax it for this one -- and must not flag the four that
+    route.
+    """
+    lef = tmp_path / "mux2i.lef"
+    lef.write_text(_MUX2I_1)
+    access = lef_pin_access(lef, "AION_mux2i_1")
+
+    assert [problem.split()[1] for problem in access.problems] == ["I2"], access.problems
 
 
 # ---------------------------------------------------------------------------

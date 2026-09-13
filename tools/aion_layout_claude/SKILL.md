@@ -20,7 +20,7 @@ and `PYTHONPATH=.` (the `Makefile` sets it for you).
 ```bash
 make scaffold CELL=<cell> NETLIST=<netlist.spice>   # once: a starting generator
 $EDITOR cells/<cell>.py                             # ← the only thing you do by hand
-make verify  CELL=<cell> NETLIST=<netlist.spice>    # build + DRC + LVS, one RESULT: line
+make verify  CELL=<cell> NETLIST=<netlist.spice>    # build + DRC + LVS + pin access, one RESULT: line
 make evidence CELL=<cell> NETLIST=<netlist.spice>   # what to fix, with coordinates
 ```
 
@@ -187,14 +187,15 @@ is, and it is stricter than it looks. Tracks
 `y = n * 420` nm on every Metal. A wire runs *along* its layer's preferred direction, so
 it stops anywhere on that axis but is pinned to a track on the other one:
 
-| Layer    | `DIRECTION` | the port shape must contain |
+| Layer    | `DIRECTION` | draw the port shape across  |
 | -------- | ----------- | --------------------------- |
 | `Metal1` | HORIZONTAL  | a `y = n * 420` nm line     |
 | `Metal2` | VERTICAL    | an `x = n * 480` nm line    |
 
-A port that covers no track places fine, routes globally fine, then aborts the entire
-design in detailed routing with `DRT-0073 No access point`. That is a hard abort, not a
-DRC — nothing downgrades it, and it costs an hour of flow to discover.
+A port that covers no track, with no room beside it for a via to hang off onto, places
+fine, routes globally fine, then aborts the entire design in detailed routing with
+`DRT-0073 No access point`. That is a hard abort, not a DRC — nothing downgrades it, and
+it costs an hour of flow to discover.
 
 This is easy to get wrong on an **output** port squeezed between two other Metal1 shapes.
 `M1.a` min width is 160 nm and `M1.b` min spacing is 180 nm, so a port in a 520 nm channel
@@ -208,13 +209,14 @@ of `sg13g2_a21oi_1` is a multi-rect stub from `y = 720` to `y = 3160`, crossing 
 tracks) or drop a `Via1` and put the port on Metal2, where the rule becomes an
 `x = n * 480` line.
 
-### Every port must be at least 210 nm across
+### Draw every port at least 210 nm across
 
 Touching a track is not enough. The wire that runs onto the port still has to get *down*
 to it, and every `ViaN` in `sg13g2_tech.lef` is a 190 nm cut enclosed by **290 x 210 nm**
-on the metal below, in either orientation. The long side lies along the wire and may hang
-off the end of the port onto the rest of the net — `sg13g2_nand4_1`'s `A` does exactly
-that, its widest rect being 275 nm. The short side may not.
+on the metal below, in either orientation. A via may hang off the port — its enclosure
+only has to overlap it — but only onto Metal1 that no other net comes within 180 nm of
+(`M1.b`). In a squeezed channel there is no such Metal1, so the port itself has to hold
+the via.
 
 This is how the second attempt failed. `AION_a21oi_nor2_1`'s `O0` was grown to
 `y = 1090 … 1270` to reach the track at `1260` — on the grid, and 180 nm across, so a via
@@ -227,10 +229,10 @@ the rule, so a minimum-width strap is fine as a wire and not as a port.
 
 ### Nothing may sit on the port's via landing
 
-`make export` runs `lef write -hide -pinonly`, which writes **only the labelled rectangle
-as a `PORT`, and every other shape in the cell as `OBS`** — the rest of the port's own net
-included. `AION_nand2_o21ai_0` died on that. It routes `O0` up to Metal2 correctly, but
-the label sits on the Metal1 end, so the strap was exported as
+To the router, every shape in the LEF that is not this pin's `PORT` belongs to another
+net: the cell's `OBS` and every other pin. `AION_nand2_o21ai_0` died on that. It routes
+`O0` up to Metal2 correctly, but the label sits on the Metal1 end, and the strap was
+exported as
 
 ```
 OBS
@@ -245,10 +247,20 @@ ends. So either put the port on the layer that has the room, with `draw_m2_pin` 
 strap then *is* the port — or keep Metal2 off the Metal1 port so the via up has somewhere
 to land.
 
-`make verify` checks all three of these against the built GDS, so they fail inside the
-`edit → verify` loop; `make export` checks the LEF magic wrote and refuses to publish; and
-`make pnr` refuses to start. All 283 signal pins of the PDK `sg13g2_stdcell` library
-satisfy them.
+"Off" means **210 nm clear** (`M2.b`), not merely not overlapping: the via's Metal2 pad
+(290 x 200 nm) is a Metal2 shape like any other. `AION_mux2i_1/I2` has another net's
+Metal2 riser 15 nm beside each gate pad, and Metal1 of other nets crowding everywhere a via
+could slide to — no access point, `DRT-0073`. `AION_mux2_0/I0` has a strap 5 nm to the
+right of its port too, but free Metal1 on the left, and the router put its `Via1` 60 nm
+off the port with the pad 265 nm clear of the strap: the first pin is unroutable, the
+second routes on all 126 instances.
+
+`make verify` writes the LEF with magic and grades it the way `make export` and `make pnr`
+do, so an unreachable pin fails inside the `edit → verify` loop. What the check requires is
+that **some `ViaN` overlaps the port with its Metal1 enclosure 180 nm clear of other nets'
+Metal1 and its Metal2 pad 210 nm clear of other nets' Metal2**. Covering a track and being
+210 nm across are the way to get there without thinking about it, not the rule itself.
+All 283 signal pins of the PDK `sg13g2_stdcell` library pass.
 
 ## Rail tap contacts go at `x = 160 + 480k`
 

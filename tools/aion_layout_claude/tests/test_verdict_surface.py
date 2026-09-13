@@ -51,16 +51,8 @@ ROW_LEGAL = CellGeometry(
     cell=CELL, width_um=2.88, height_um=3.78, source="prBoundary"
 )
 
-#: Ports a router can land on: Metal1 is horizontal, so each spans a
-#: y = n * 420 nm track, and each is over 210 nm across so a via has somewhere
-#: to sit.  ``(name, layer, x1, y1, x2, y2)`` in nm.
-ON_TRACK_PORTS = [
-    ("I0", "Metal1", 200.0, 310.0, 490.0, 530.0),      # crosses y = 420
-    ("O0", "Metal1", 2150.0, 1570.0, 2550.0, 1790.0),  # crosses y = 1680
-]
-
 #: Geometry a cell can be abutted with: rail tap contacts on the shared grid
-#: (x = 160 + 480k, one per site) and nothing drawn over a port's via landing.
+#: (x = 160 + 480k, one per site).
 #:
 #: Supplied rather than read from ``known_gds`` because the worked example is
 #: itself off that grid -- every cells/*.py places taps at 150 + 430k -- so
@@ -98,7 +90,7 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
     shutil.copy(known_gds, work / f"{CELL}.gds")
 
     def run(*, magic=None, klayout=None, lvs=None, geometry=ROW_LEGAL, tables=(1, ()),
-            ports=ON_TRACK_PORTS, drawn=ABUTTABLE):
+            drawn=ABUTTABLE, abstract=((), ())):
         base_magic, base_klayout, base_lvs = reports(clean_tree)
         monkeypatch.setattr(
             steps, "drc",
@@ -107,8 +99,13 @@ def graded(monkeypatch, tmp_path, known_gds, netlist_path, clean_tree):
         monkeypatch.setattr(steps, "lvs", lambda *a, **k: lvs or base_lvs)
         monkeypatch.setattr(steps, "gds_boundary", lambda *a, **k: geometry)
         monkeypatch.setattr(steps, "klayout_table_logs", lambda *a, **k: tables)
-        monkeypatch.setattr(steps, "declared_ports", lambda *a, **k: ports)
         monkeypatch.setattr(steps, "drawn_shapes", lambda *a, **k: drawn)
+        # (errors, failures), as abstract_problems returns them; writing the
+        # LEF is a magic run in the container.
+        monkeypatch.setattr(
+            steps, "abstract_problems",
+            lambda *a, **k: (list(abstract[0]), list(abstract[1])),
+        )
         return steps.verify(
             "unused-because-skip-build",
             CELL,
@@ -201,68 +198,120 @@ def test_an_unavailable_magic_report_is_an_error_not_a_pass(graded, tmp_path):
     assert any("Magic" in r for r in verdict.reasons)
 
 
-def test_a_port_off_the_routing_grid_is_not_a_pass(graded):
-    """The failure this grader was extended to catch.
+def test_a_pin_the_abstract_leaves_unreachable_fails_in_the_loop(graded):
+    """Pin access fails here, in the loop, on the LEF that publishing grades.
 
-    Metal1 routes along y = n * 420 nm.  A port between two tracks is
-    DRC-clean, LVS-clean and row-legal, and then aborts detailed routing for
-    the whole design with DRT-0073 -- twelve minutes into step 7, long after
-    this cell looked finished.
+    It used to be graded here by a different rule than the one publishing
+    applied to the LEF, and the two disagreed: AION_mux2_0 passed verify, was
+    refused at publish, and never reached implementation/cells/ with nothing in
+    the drawing loop to say why.
     """
-    verdict = graded(
-        ports=[("O0", "Metal1", 2150.0, 1090.0, 2550.0, 1250.0)]  # 10 nm under 1260
+    unreachable = (
+        "abstract (LEF): PIN I0 has no via access: no ViaN can overlap the port "
+        "with its Metal1 enclosure and keep both of its metal shapes clear of "
+        "every other net"
     )
+    verdict = graded(abstract=((), (unreachable,)))
 
     assert verdict.result == "FAIL", (
-        "the tools ran and the answer is that the layout is wrong, which is "
-        f"FAIL, not ERROR: {verdict.result} {verdict.reasons}"
+        "magic wrote the LEF and the LEF is wrong: that is FAIL, not ERROR: "
+        f"{verdict.result} {verdict.reasons}"
     )
-    assert any("DRT-0073" in reason for reason in verdict.reasons), (
-        "the reason must name the error it prevents, so a model reading the "
-        f"verdict knows what it is being asked to fix: {verdict.reasons}"
-    )
-    assert any("1260" in reason for reason in verdict.reasons), (
-        f"and where the nearest track is, or it cannot act on it: {verdict.reasons}"
-    )
+    assert unreachable in verdict.reasons, verdict.reasons
 
 
-def test_a_port_too_thin_for_a_via_fails_in_the_loop(graded):
-    """The thin-port half of pin access has to fail here, not only at export.
-
-    AION_a21oi_nor2_1/O0 as first drawn: on the grid, 180 nm across, and a hard
-    DRT-0073 in step 7.
-    """
-    verdict = graded(ports=[("O0", "Metal1", 2150.0, 1090.0, 2550.0, 1270.0)])
-
-    assert verdict.result == "FAIL", "180 nm across cannot take a via"
-    assert any("no via can land on it" in r for r in verdict.reasons), verdict.reasons
-
-
-def test_metal_drawn_over_a_port_fails_in_the_loop(graded):
-    """A strap over the port is an OBS in the LEF, so it has to fail here too.
-
-    AION_nand2_o21ai_0/O0: a Metal1 port on the grid and wide enough, with the
-    cell's own Metal2 output strap running straight over the only place a via
-    could land.  ``lef write -pinonly`` labels one rectangle and puts the rest
-    in OBS, so this passes every other check and dies in detailed routing.  The
-    verdict has to name it while the model that drew it can still move it --
-    which is the whole point of grading ports here rather than at export.
-    """
-    port = [("O0", "Metal1", 1790.0, 960.0, 2050.0, 1270.0)]
-    over = {"Metal2": [(1835.0, 950.0, 2035.0, 2650.0)]}
-    clear = {"Metal2": [(2400.0, 950.0, 2600.0, 2650.0)]}
-
-    blocked = graded(ports=port, drawn=over)
-    assert blocked.result == "FAIL", "the strap covers every via landing"
-    assert any("could land on" in r for r in blocked.reasons), blocked.reasons
-    assert any("declare O0 on Metal2" in r for r in blocked.reasons), (
-        f"the verdict has to say what to do about it: {blocked.reasons}"
+def test_an_abstract_that_could_not_be_written_is_not_a_pass(graded):
+    """No LEF is no evidence about pin access, which is ERROR like any other."""
+    verdict = graded(
+        abstract=(("the abstract (LEF) of X could not be written: magic exited 125",), ())
     )
 
-    moved = graded(ports=port, drawn=clear)
-    assert moved.result == "PASS", (
-        f"the same port is fine once the strap is off it: {moved.reasons}"
+    assert verdict.result == "ERROR", f"{verdict.result} {verdict.reasons}"
+    assert any("could not be written" in r for r in verdict.reasons), verdict.reasons
+
+
+_ABSTRACT_LEF = f"""\
+VERSION 5.7 ;
+MACRO {CELL}
+  CLASS CORE ;
+  SIZE 2.88 BY 3.78 ;
+  SITE CoreSite ;
+  PIN I0
+    PORT
+      LAYER Metal1 ;
+        RECT 2.220 1.450 2.520 1.790 ;
+    END
+  END I0
+  PIN VDD
+    USE POWER ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.000 3.560 2.880 4.000 ;
+    END
+  END VDD
+  PIN VSS
+    USE GROUND ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.000 -0.220 2.880 0.220 ;
+    END
+  END VSS
+  OBS
+      LAYER Metal1 ;
+        RECT 1.900 1.450 2.000 1.790 ;
+      LAYER Metal2 ;
+        RECT 2.525 0.620 2.725 2.710 ;
+  END
+END {CELL}
+END LIBRARY
+"""
+
+
+def test_abstract_problems_grades_the_lef_magic_wrote(monkeypatch, tmp_path):
+    """The abstract is graded by the same check_lef that publishing runs."""
+    gds = tmp_path / f"{CELL}.gds"
+    gds.write_bytes(b"not read: export_lef is replaced")
+
+    def written(gds_path, cell, out, **kwargs):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(_ABSTRACT_LEF)
+        return out
+
+    monkeypatch.setattr(steps, "export_lef", written)
+    errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
+
+    assert errors == []
+    assert len(failures) == 1 and "PIN I0" in failures[0], failures
+    assert failures[0].startswith("abstract (LEF): "), (
+        f"the reason has to say which artifact it is about: {failures}"
     )
+
+
+def test_abstract_problems_tells_a_refused_lef_from_a_missing_one(monkeypatch, tmp_path):
+    """A LEF export_lef refused is a FAIL; a LEF magic never wrote is an ERROR."""
+    gds = tmp_path / f"{CELL}.gds"
+    gds.write_bytes(b"not read: export_lef is replaced")
+    rejected = tmp_path / steps.ABSTRACT_DIR / f"{CELL}.lef.rejected"
+
+    def refused(gds_path, cell, out, **kwargs):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rejected.write_text("the LEF that was refused\n")
+        raise steps.ExportError("the LEF and the GDS disagree about the size")
+
+    monkeypatch.setattr(steps, "export_lef", refused)
+    errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
+    assert errors == [] and len(failures) == 1, (errors, failures)
+    assert "was refused" in failures[0]
+
+    def no_magic(gds_path, cell, out, **kwargs):
+        raise steps.ExportError("magic wrote no LEF (status 125)")
+
+    # The quarantine left by the refusal above must not turn a container that
+    # is down into a statement about the cell.
+    monkeypatch.setattr(steps, "export_lef", no_magic)
+    errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
+    assert failures == [] and len(errors) == 1, (errors, failures)
+    assert "could not be written" in errors[0]
 
 
 def test_off_grid_rail_taps_fail_in_the_loop(graded):
@@ -282,33 +331,6 @@ def test_off_grid_rail_taps_fail_in_the_loop(graded):
     assert any("abutment grid" in r for r in verdict.reasons), verdict.reasons
     assert any("160 + 480k" in r for r in verdict.reasons), (
         f"the verdict has to name the grid to move to: {verdict.reasons}"
-    )
-
-
-def test_power_ports_are_not_graded_against_the_track_grid(graded):
-    """VDD and VSS are strapped by the PDN; the signal router never lands."""
-    verdict = graded(
-        ports=ON_TRACK_PORTS + [
-            ("VDD", "Metal1", 0.0, 3560.0, 2880.0, 4000.0),
-            ("VSS", "Metal1", 0.0, -220.0, 2880.0, 220.0),
-        ]
-    )
-
-    assert verdict.result == "PASS", (
-        f"the rails answer to the PDN, not to the track grid: {verdict.reasons}"
-    )
-
-
-def test_ports_that_could_not_be_read_are_not_a_pass(graded):
-    """Unknown is not clean -- the rule the whole grader is built on."""
-    verdict = graded(ports=None)
-
-    assert verdict.result == "ERROR", (
-        "a build that recorded no ports leaves the track rule unchecked; "
-        f"reporting PASS would be inventing the answer: {verdict.result}"
-    )
-    assert any("routing track grid" in reason for reason in verdict.reasons), (
-        verdict.reasons
     )
 
 

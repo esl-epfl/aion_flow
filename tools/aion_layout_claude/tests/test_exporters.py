@@ -43,13 +43,15 @@ def lef_text(
     height=3.78,
     pins=("I0", "I1", "I2", "O0", "VDD", "VSS"),
     pin_rect=(0.200, 0.310, 0.490, 0.530),
+    obs=(),
 ):
     """A LEF macro with one knob per requirement, so each can be broken alone.
 
-    ``pin_rect`` defaults to a Metal1 port straddling y = 0.42 um, the first
-    Metal1 track, and 0.29 x 0.22 um across: a port that misses the track grid
-    is a rejection and so is one too small for a via to land on, so the passing
-    fixture has to clear both.
+    ``pin_rect`` is the Metal1 port of the first pin; each further pin is the
+    same rectangle ``PIN_STEP`` um to the right, because pins are different nets
+    and a via has to keep its spacing from all of them.  The default straddles
+    y = 0.42 um, the first Metal1 track.  ``obs`` is ``(layer, rect)`` pairs
+    written to an OBS block, which is how a test takes a pin's via access away.
     """
     lines = ["VERSION 5.7 ;", "BUSBITCHARS \"[]\" ;", "", f"MACRO {cell}"]
     if cell_class is not None:
@@ -59,21 +61,41 @@ def lef_text(
     lines.append(f"  SIZE {width} BY {height} ;")
     if site is not None:
         lines.append(f"  SITE {site} ;")
-    for pin in pins:
+    for index, pin in enumerate(pins):
         direction = "INOUT" if pin in ("VDD", "VSS") else "INPUT"
         use = "POWER" if pin == "VDD" else "GROUND" if pin == "VSS" else "SIGNAL"
+        x1, y1, x2, y2 = pin_rect
+        shift = index * PIN_STEP
         lines += [
             f"  PIN {pin}",
             f"    DIRECTION {direction} ;",
             f"    USE {use} ;",
             "    PORT",
             "      LAYER Metal1 ;",
-            "        RECT {:.3f} {:.3f} {:.3f} {:.3f} ;".format(*pin_rect),
+            "        RECT {:.3f} {:.3f} {:.3f} {:.3f} ;".format(
+                x1 + shift, y1, x2 + shift, y2
+            ),
             "    END",
             f"  END {pin}",
         ]
+    if obs:
+        lines.append("  OBS")
+        for layer, rect in obs:
+            lines.append(f"      LAYER {layer} ;")
+            lines.append("        RECT {:.3f} {:.3f} {:.3f} {:.3f} ;".format(*rect))
+        lines.append("  END")
     lines += [f"END {cell}", "", "END LIBRARY"]
     return "\n".join(lines) + "\n"
+
+
+#: How far right each pin's port sits from the previous one: 0.18 um of Metal1
+#: between neighbouring 0.29 um ports, which is exactly the minimum spacing.
+PIN_STEP = 0.47
+
+#: Metal2 across the first pin of the default fixture and well past it, so that
+#: no via reaching that pin keeps its pad 0.21 um clear, while the second pin
+#: still has room for one.
+STRAP_OVER_FIRST_PIN = (("Metal2", (0.150, 0.000, 0.400, 1.200)),)
 
 
 def write_lef(tmp_path, **kwargs):
@@ -208,42 +230,47 @@ def test_every_problem_is_reported_not_only_the_first(tmp_path):
     )
 
 
-def test_a_pin_that_covers_no_routing_track_is_rejected(tmp_path):
+def test_a_pin_no_via_can_reach_is_rejected(tmp_path):
     """The failure that survives placement and kills detailed routing.
 
-    Metal1 is DIRECTION HORIZONTAL, so its wires run along y = n * 0.42 um. A
-    port between two tracks has nothing to land on and OpenROAD aborts the
-    whole design with DRT-0073, an hour into step 7 -- so it is graded here.
+    The router enters a Metal1 port through a via, and a via whose Metal2 pad
+    cannot keep 0.21 um from another net's Metal2 cannot be placed.  With no
+    position left, OpenROAD aborts the whole design with DRT-0073 an hour into
+    step 7 -- so it is graded here.
     """
-    # y 0.200 .. 0.360 sits between the tracks at y = 0.0 and y = 0.42.
-    check = exporters.check_lef(
-        write_lef(tmp_path, pin_rect=(0.200, 0.200, 0.360, 0.360))
-    )
+    check = exporters.check_lef(write_lef(tmp_path, obs=STRAP_OVER_FIRST_PIN))
 
     assert not check.ok, (
-        "a Metal1 port covering no y = n * 0.42 track is unroutable; "
-        f"check_lef passed it: {check.problems}"
+        f"no via reaches I0 past the strap across it; check_lef passed it: {check.problems}"
     )
-    assert any("covers no routing track" in p for p in check.problems), check.problems
+    assert any("has no via access" in p for p in check.problems), check.problems
     assert any("DRT-0073" in p for p in check.problems), (
         "the rejection must name the error it prevents, or the reader has no "
         f"way to connect it to the failure they will otherwise see: {check.problems}"
     )
 
 
+def test_a_pin_off_the_track_grid_is_not_rejected_for_that(tmp_path):
+    """Covering no track is not a reason on its own.
+
+    TritonRoute pin access reaches Metal1 ports that miss every y = n * 0.42 um
+    line whenever the via has room to overlap them, so rejecting one would keep
+    a routable cell out of place and route.
+    """
+    check = exporters.check_lef(write_lef(tmp_path, pin_rect=(0.200, 0.200, 0.360, 0.360)))
+
+    assert check.ok, check.problems
+
+
 def test_only_the_offending_pin_is_reported(tmp_path):
     """One problem per bad pin, so a redraw knows which port to move."""
     check = exporters.check_lef(
-        write_lef(tmp_path, pins=("I0", "O0", "VDD", "VSS"),
-                  pin_rect=(0.200, 0.200, 0.360, 0.360))
+        write_lef(tmp_path, pins=("I0", "O0", "VDD", "VSS"), obs=STRAP_OVER_FIRST_PIN)
     )
 
-    offenders = [p for p in check.problems if "covers no routing track" in p]
-    assert len(offenders) == 2, (
-        f"I0 and O0 are both off the grid, VDD and VSS are exempt: {check.problems}"
-    )
-    assert not any("VDD" in p or "VSS" in p for p in offenders), (
-        f"power pins are not routed as signals and must not be graded: {offenders}"
+    offenders = [p for p in check.problems if "has no via access" in p]
+    assert len(offenders) == 1 and "PIN I0" in offenders[0], (
+        f"only I0 is under the strap; O0 has room, VDD and VSS are exempt: {check.problems}"
     )
 
 

@@ -1093,6 +1093,25 @@ class DriverCal:
     def __init__(self):
         self._lock = threading.Lock()
         self._samples: dict[tuple, list[tuple[float, float]]] = {}
+        #: One lock per calibration key.  ``_lock`` guards the sample dict; this
+        #: guards the *files*, which the sample dict cannot.  ``solve`` names its
+        #: decks ``cal_<pin>_<sense>_<edge>_<n>.spice`` from a counter that is
+        #: local to the call, and the tag carries no slew -- so the seven arc
+        #: threads that share a (pin, sense, edge) all write and run
+        #: ``cal_I2_p_fall_1.spice``.  Two of them concurrently and one reads a
+        #: half-written deck: "incomplete or empty netlist ... no simulations
+        #: run!", from a file that is intact by the time anyone looks at it.
+        #:
+        #: Serialising per key also makes the sample cache do its job -- the
+        #: later threads find the bracketing points already solved instead of
+        #: re-running them -- and keeps the deck names stable and meaningful,
+        #: which a uuid in the filename would not.  Different keys still
+        #: calibrate in parallel.
+        self._keylocks: dict[tuple, threading.Lock] = {}
+
+    def _keylock(self, key) -> threading.Lock:
+        with self._lock:
+            return self._keylocks.setdefault(key, threading.Lock())
 
     def _add(self, key, ramp: float, slew: float) -> None:
         with self._lock:
@@ -1106,6 +1125,10 @@ class DriverCal:
 
     def solve(self, args, ctx, cell, pin, side, target, edge, workdir, tag):
         key = (cell.name, pin, tuple(sorted(side.items())), edge, ctx.corner.tag)
+        with self._keylock(key):
+            return self._solve(args, ctx, cell, pin, side, target, edge, workdir, tag, key)
+
+    def _solve(self, args, ctx, cell, pin, side, target, edge, workdir, tag, key):
         meas = "sr" if edge == "rise" else "sf"
         cal_load = args.driver_cal_load * args.units_cap
         evals = [0]

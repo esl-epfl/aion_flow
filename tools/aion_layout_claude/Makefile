@@ -52,6 +52,41 @@ PEX_DIR       ?= $(BUILD_DIR)/pex
 # has no business knowing.  Override them per run with `--corner` if needed.
 CORNERS       ?= typ
 JOBS          ?= 8
+
+# ---- Characterization stimulus. ---------------------------------------------
+# Empty means aion_char's default, an ideal linear ramp. That is right for
+# static CMOS and wrong for anything with a pass gate on an input path: a ramp
+# is a zero-impedance driver, and a transmission gate's input is a source/drain
+# where the driver stays in series with the channel for the whole transition.
+# Set DRIVER to a real cell to characterize the way vendor libraries do:
+#
+#   make characterize DRIVER=sg13g2_buf_2
+#   make flow         DRIVER=sg13g2_buf_2      # candidate AND baseline
+#
+# The driver MUST BE NON-INVERTING. aion_char drives the pin under test
+# through it from a ramp that always rises first, and derives the expected
+# output edge from the cell's own unateness -- nothing anywhere accounts for a
+# driver that flips the pin. An inverting one inverts every expected level and
+# the run dies as "the output still had not settled", pinned at the opposite
+# rail even at 1 fF. Use a buffer (`A -> X`), not an inverter.
+DRIVER        ?=
+DRIVER_IN     ?= A
+DRIVER_OUT    ?= X
+
+# ---- Parasitic extraction mode. ---------------------------------------------
+# 1 C-decoupled, 2 C-coupled, 3 full RC (default). Mode 3 is the default because
+# wire resistance inside a hand-drawn cell is exactly what a small layout can
+# get wrong. It is also the only mode that runs Magic's `extresist`, which
+# splits a resistive net into renamed segments and can leave the .subckt port
+# bound to none of them -- a floating rail that LVS cannot see, because LVS
+# extracts without resistance. run_pex refuses such a netlist by name. When it
+# does, drop BOTH sides of the comparison to mode 2:
+#
+#   make flow PEX_MODE=2
+PEX_MODE      ?= 3
+DRIVER_ARGS    = $(if $(DRIVER),--driver-cell $(DRIVER) \
+                 --driver-input $(DRIVER_IN) --driver-output $(DRIVER_OUT),)
+
 PYTHON        ?= python3
 PYTEST        ?= $(PYTHON) -m pytest
 AION           = $(PYTHON) -m aion_layout
@@ -127,7 +162,7 @@ verify: ## Build + DRC + LVS and print RESULT: PASS|FAIL|ERROR
 		-w $(BUILD_DIR) --report $(BUILD_DIR)/$(CELL).report.md
 
 pex: gds ## Extract parasitics from the GDS into PEX_DIR
-	$(AION) pex $(GDS) --cell $(CELL) -w $(PEX_DIR)
+	$(AION) pex $(GDS) --cell $(CELL) -w $(PEX_DIR) --mode $(PEX_MODE)
 
 evidence: ## Write the evidence packet for CELL into BUILD_DIR
 	$(AION) evidence --cell $(CELL) --netlist $(NETLIST) \
@@ -141,7 +176,7 @@ baseline: ## Abut the PDK cells of BASELINE, then DRC + LVS + PEX + characterize
 characterize: ## Characterize CELL from its PEX netlist into CHAR_DIR
 	@test -n "$(PEX_SPICE)" || { echo "no PEX netlist in $(PEX_DIR); run 'make pex' first" >&2; exit 2; }
 	$(AION) characterize $(PEX_SPICE) --cell $(CELL) \
-		-o $(CHAR_DIR) --jobs $(JOBS) --area-gds $(GDS)
+		-o $(CHAR_DIR) --jobs $(JOBS) --area-gds $(GDS) $(DRIVER_ARGS)
 
 compare: ## Compare CELL against BASELINE_CELL; prints COMPARE: WIN|LOSS
 	@test -n "$(CANDIDATE_LIB)" || { echo "no Liberty in $(CHAR_DIR); run 'make characterize' first" >&2; exit 2; }
@@ -166,7 +201,8 @@ export: ## Write the gds/lef/lib/v/spice/cdl views into FINAL_DIR
 flow: ## Run the whole chain: verify, pex, baseline, characterize, export, compare
 	$(AION) flow $(NETLIST) --cell $(CELL) --module $(CELL_MODULE) \
 		--baseline $(BASELINE) -o $(BUILD_DIR) \
-		--corners $(CORNERS) --jobs $(JOBS)
+		--corners $(CORNERS) --jobs $(JOBS) $(DRIVER_ARGS) \
+		--pex-mode $(PEX_MODE)
 
 test: ## Run the host-side test suite (no container, no PDK)
 	$(PYTEST) tests/ -q

@@ -91,6 +91,80 @@ DEFAULT_LOADS_PF: Tuple[float, ...] = (0.001, 0.0234, 0.039, 0.0648, 0.108, 0.18
 
 #: Device models, spelled for the container's shell to expand.
 MODEL_LIB = '"$PDK_ROOT/$PDK/libs.tech/ngspice/models/cornerMOSlv.lib"'
+#: The PDK's own transistor views, spelled the same way.  This is where a
+#: driver cell's ``.subckt`` comes from: a PEX netlist defines the cell under
+#: test and nothing else, so ``--driver-cell sg13g2_inv_2`` would otherwise be
+#: refused with "no '.subckt sg13g2_inv_2' in the SPICE files given".
+STDCELL_SPICE = '"$PDK_ROOT/$PDK/libs.ref/sg13g2_stdcell/spice/sg13g2_stdcell.spice"'
+
+
+@dc.dataclass(frozen=True)
+class Driver:
+    """A real cell used as the stimulus, instead of ``aion_char``'s ideal ramp.
+
+    An NLDM arc says ``delay = f(input slew, output load)``, which is exact
+    when the cell's input is a transistor gate: the gate capacitance isolates,
+    and the driver's job ends with the waveform it produced.  A *pass gate's*
+    input is a source/drain, so the driver stays in series with the channel for
+    the whole transition and two drivers of equal slew but different impedance
+    give different delays -- a dependence NLDM has no axis for.  An ideal ramp
+    is the zero-impedance end of that range, i.e. the most optimistic driver
+    that exists, so a transmission-gate cell characterized against one is
+    flattered by exactly the effect its Liberty cannot express.
+
+    Passing a real cell here is how vendor libraries are characterized and is
+    the only honest way to time the cells under
+    ``implementation/pdk_extension/``; each of their SPICE headers says so.
+
+    ``spice`` is the file holding the driver's ``.subckt``.  It defaults to the
+    PDK's standard-cell netlist because a PEX netlist defines only the cell
+    that was extracted, and it is left unquoted at the point of use so the
+    container's shell expands ``$PDK_ROOT``/``$PDK`` -- the same contract
+    :data:`MODEL_LIB` has.
+
+    The driver's supply pins are not modelled here: ``aion_char`` defaults
+    ``--driver-power``/``--driver-ground`` to the cell's own ``--power``/
+    ``--ground``, which are ``VDD``/``VSS``, and every sg13g2 cell uses those.
+    """
+
+    cell: str
+    in_pin: str
+    out_pin: str
+    spice: str = STDCELL_SPICE
+
+    def __post_init__(self) -> None:
+        missing = [
+            name
+            for name, value in (
+                ("cell", self.cell),
+                ("in_pin", self.in_pin),
+                ("out_pin", self.out_pin),
+            )
+            if not str(value).strip()
+        ]
+        if missing:
+            # aion_char refuses the same combination, but it does so inside the
+            # container after PEX has already run.  A SPICE .subckt does not say
+            # which of its pins is the input, so there is nothing to infer.
+            raise CharacterizeError(
+                f"driver cell: {', '.join(missing)} must be given "
+                f"(got cell={self.cell!r}, in_pin={self.in_pin!r}, "
+                f"out_pin={self.out_pin!r})"
+            )
+
+    @property
+    def args(self) -> Tuple[str, ...]:
+        """The ``--driver-*`` arguments that are safe to shell-quote."""
+        return (
+            "--driver-cell", self.cell,
+            "--driver-input", self.in_pin,
+            "--driver-output", self.out_pin,
+        )
+
+    def describe(self) -> str:
+        return f"{self.cell} ({self.in_pin} -> {self.out_pin})"
+
+
 #: The Liberty template, relative to the repository root.
 LIB_TEMPLATE = "tools/aion_char/templates/sg13g2.lib.tmpl"
 #: ``aion_char``'s package directory, relative to the repository root.
@@ -115,13 +189,18 @@ class CharResult:
     area_um2: float
     spice_used: Path
     corners: Tuple[Corner, ...]
+    #: The stimulus these tables were measured with, or None for an ideal ramp.
+    #: Recorded because it is not visible in the Liberty and changes what the
+    #: numbers mean -- see :class:`Driver`.
+    driver: Optional[Driver] = None
 
     def describe(self) -> str:
         """One line, for a report or a verdict block."""
         return (
             f"{self.cell}: {len(self.lib_files)} corner(s) "
             f"[{', '.join(c.name for c in self.corners)}] from {self.spice_used.name}, "
-            f"area {self.area_um2:.4f} um^2"
+            f"area {self.area_um2:.4f} um^2, "
+            f"driven by {self.driver.describe() if self.driver else 'an ideal ramp'}"
         )
 
 
@@ -150,6 +229,64 @@ def _has_subckt(text: str, name: str) -> bool:
     return re.search(
         _SUBCKT_RE.format(name=re.escape(name)), text, re.IGNORECASE | re.MULTILINE
     ) is not None
+
+
+def _require_ports_connected(target: Path, text: str, subckt: str) -> None:
+    """Refuse a PEX netlist whose ``.subckt`` declares a port nothing uses.
+
+    Magic's ``extresist`` splits a resistive net into segments and renames them
+    -- ``VSS`` becomes ``VSS.t0``, ``VSS.n1`` and so on -- and it can end up
+    binding the *port* name to none of them.  The port is then declared and
+    never referenced, so every device that net feeds is floating.  For a ground
+    rail that means no pull-down works at all and the extracted cell drives its
+    output to one rail for every input vector.
+
+    Nothing downstream notices.  LVS runs on a different, non-RC extraction and
+    passes -- the layout really is one net -- so the first symptom is a Liberty
+    file full of measurements of a broken circuit: a function like ``O0 = 1``,
+    no timing arcs, and a comparison that fails with "publishes no timing arcs"
+    an hour later, pointing at the wrong thing.  It is cheap to catch here and
+    expensive to catch anywhere else, so it is caught here.
+
+    The remedy is not to raise ``extresist threshold`` until the warning goes
+    away: past about the rail's own resistance that switches resistance
+    extraction off entirely (``R`` elements drop to zero) and quietly turns a
+    full-RC extraction into a C-only one, which is a different measurement
+    wearing the same file name.
+    """
+    header = re.search(
+        _SUBCKT_RE.format(name=re.escape(subckt)) + r"(?P<ports>[^\n]*)",
+        text,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if header is None:  # already checked by the caller; belt and braces
+        return
+    ports = header.group("ports").split()
+    body = text[header.end():]
+    # An exact-token match: `VSS` must not be satisfied by `VSS.t0`, which is
+    # precisely the confusion this function exists to detect.
+    orphans = [
+        p for p in ports
+        if not re.search(rf"(?<![^\s]){re.escape(p)}(?![^\s])", body)
+    ]
+    if orphans:
+        raise CharacterizeError(
+            f"{target}: port(s) {', '.join(orphans)} are declared on the "
+            f"'.subckt {subckt}' line and referenced by nothing in it, so every "
+            "device on those nets is floating and the extracted cell does not "
+            "compute its function.\n"
+            "       This is Magic's extresist renaming a split net's segments "
+            "(VSS -> VSS.t0, VSS.n1, ...) without binding the port to any of "
+            "them. LVS does not see it: it runs a non-RC extraction where the "
+            "net is whole.\n"
+            "       Re-run with --pex-mode 2 (C-coupled), which skips extresist "
+            "entirely and applies to both sides of a comparison, so the two "
+            "halves stay the same measurement. What that costs is wire "
+            "resistance; what it buys is a netlist whose rails are connected.\n"
+            "       Do NOT raise the extresist threshold instead: past the "
+            "rail's own resistance it drops every R element from the netlist "
+            "and silently turns full RC into C-only under a _pex3 file name."
+        )
 
 
 def run_pex(
@@ -232,6 +369,7 @@ def run_pex(
             f"{target} defines '.subckt {subckt}' but holds no device instance; the "
             "extraction found no transistors"
         )
+    _require_ports_connected(target, text, subckt)
 
     # Magic leaves these in whatever directory it ran in; ref_makefile_1.mk removes
     # them for the same reason: they are not results, and a stale pair confuses the
@@ -398,6 +536,7 @@ def characterize(
     slews: Optional[Sequence[float] | str] = None,
     loads: Optional[Sequence[float] | str] = None,
     verify: bool = True,
+    driver: Optional[Driver] = None,
     timeout: int = CHAR_TIMEOUT,
 ) -> CharResult:
     """Characterize ``cell`` in ``spice`` into one Liberty file per corner.
@@ -406,6 +545,14 @@ def characterize(
     timing tables carry the layout's own parasitics; any transistor-level
     netlist that defines ``.subckt <cell>`` works, and the result records which
     one was used.
+
+    ``driver`` replaces ``aion_char``'s default ideal ramp with a real cell as
+    the stimulus.  Leave it None for static CMOS; pass one for anything with a
+    pass gate on an input path, where an ideal ramp is a zero-impedance driver
+    and therefore the most optimistic case that exists -- :class:`Driver` says
+    why at length.  It is recorded on the :class:`CharResult`, because two
+    Liberty files measured with different stimuli are not comparable and
+    nothing in the ``.lib`` itself says which one was used.
 
     ``verify=True`` leaves ``aion_char``'s functional check switched on.  Be
     clear about what that buys: the check needs an *oracle* -- a Liberty or
@@ -475,13 +622,17 @@ def characterize(
         argv += ["--corner", corner.spec]
     if not verify:
         argv.append("--no-verify")
+    if driver is not None:
+        argv += list(driver.args)
 
-    # --model-lib is left unquoted on purpose: $PDK_ROOT and $PDK are set inside the
-    # container and nowhere else, so the container's shell has to expand them.
+    # --model-lib and --driver-spice are left unquoted on purpose: $PDK_ROOT and
+    # $PDK are set inside the container and nowhere else, so the container's
+    # shell has to expand them.  Both carry their own quotes.
     command = (
         f"cd {shlex.quote(_rel_to_tool(REPO_ROOT))} && PYTHONPATH={AION_CHAR_DIR} "
         + " ".join(shlex.quote(a) for a in argv)
         + f" --model-lib {MODEL_LIB}"
+        + (f" --driver-spice {driver.spice}" if driver is not None else "")
     )
     result = run_in_container(command, timeout=timeout)
     if not result.ok:
@@ -510,6 +661,7 @@ def characterize(
         area_um2=area,
         spice_used=netlist,
         corners=corner_list,
+        driver=driver,
     )
 
 
@@ -521,9 +673,11 @@ __all__ = [
     "DEFAULT_SLEWS_NS",
     "LIB_TEMPLATE",
     "MODEL_LIB",
+    "STDCELL_SPICE",
     "CharResult",
     "CharacterizeError",
     "Corner",
+    "Driver",
     "characterize",
     "run_pex",
 ]

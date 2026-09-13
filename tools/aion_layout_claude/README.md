@@ -178,12 +178,12 @@ result by accident. Those are the three wildcards the guards above cover.
 | `lvs` | `aion_layout lvs $(GDS) $(NETLIST) --cell $(CELL) -w $(BUILD_DIR)/lvs` | the Netgen report and the extracted netlist | `build/<cell>/lvs/` |
 | `verify` | `aion_layout verify $(CELL_MODULE) --cell $(CELL) --netlist $(NETLIST) -w $(BUILD_DIR) --report ...` | `RESULT: PASS\|FAIL\|ERROR`, plus everything `drc` and `lvs` produce | stdout and `build/<cell>/<cell>.report.md` |
 | `evidence` | `aion_layout evidence --cell $(CELL) --netlist $(NETLIST) --gds $(GDS) --module $(CELL_MODULE) -o ...` | the packet the model reads between edits | `build/<cell>/<cell>.evidence.md` |
-| `pex` | `aion_layout pex $(GDS) --cell $(CELL) -w $(PEX_DIR)` | the R+C extracted netlist (Magic, mode 3) | `build/<cell>/pex/<cell>_pex3.spice` |
+| `pex` | `aion_layout pex $(GDS) --cell $(CELL) -w $(PEX_DIR) --mode $(PEX_MODE)` | the extracted netlist (Magic; mode 3 = R+C by default) | `build/<cell>/pex/<cell>_pex<mode>.spice` |
 | `baseline` | `aion_layout baseline $(BASELINE) -o $(BASELINE_DIR) --verify --pex --characterize` | the abutted PDK row, verified, extracted and characterized | `build/<cell>/baseline/` |
 | `characterize` | `aion_layout characterize $(PEX_SPICE) --cell $(CELL) -o $(CHAR_DIR) --jobs $(JOBS) --area-gds $(GDS)` | Liberty, one file per corner | `build/<cell>/char/*.lib` |
 | `compare` | `aion_layout compare --cell $(CELL) --baseline-cell $(BASELINE_CELL) --candidate-lib ... --baseline-lib ... --candidate-gds ... --baseline-gds ...` | `COMPARE: WIN\|LOSS`, and the report behind it | stdout and `build/<cell>/<cell>.compare.{md,json}` |
 | `export` | `aion_layout export --cell $(CELL) --gds $(GDS) --spice $(NETLIST) --lib ... --pex-spice $(PEX_SPICE) -o $(FINAL_DIR)` | the six views, with the LEF checked | `build/<cell>/final/` |
-| `flow` | `aion_layout flow $(NETLIST) --cell $(CELL) --module $(CELL_MODULE) --baseline $(BASELINE) -o $(BUILD_DIR) --corners $(CORNERS) --jobs $(JOBS)` | all of the above in order, stopping at the first hard failure | `build/<cell>/` |
+| `flow` | `aion_layout flow $(NETLIST) --cell $(CELL) --module $(CELL_MODULE) --baseline $(BASELINE) -o $(BUILD_DIR) --corners $(CORNERS) --jobs $(JOBS) --pex-mode $(PEX_MODE)` | all of the above in order, stopping at the first hard failure | `build/<cell>/` |
 | `test` | `python3 -m pytest tests/ -q` | the host-side suite: no container, no PDK, seconds | stdout |
 | `clean` | `rm -rf $(BUILD_DIR)` | | |
 
@@ -200,6 +200,9 @@ result by accident. Those are the three wildcards the guards above cover.
 | `MIN_DEPTH` | `2` | `resize` leaves stacks this deep and shallower alone |
 | `CORNERS` | `typ` | `typ`, or `all` to add slow and fast |
 | `JOBS` | `8` | parallel ngspice runs during characterization |
+| `PEX_MODE` | `3` | parasitic extraction: 1 C-decoupled, 2 C-coupled, 3 full RC. Applied to both sides of a comparison — see below |
+| `DRIVER` | *(empty)* | characterize against this cell instead of an ideal ramp; must be non-inverting |
+| `DRIVER_IN` / `DRIVER_OUT` | `A` / `X` | its pins, defaulted to an `sg13g2_buf_*` |
 
 `python3 -m aion_layout <command> --help` documents every flag; the `Makefile`
 uses a subset of them.
@@ -210,8 +213,9 @@ uses a subset of them.
 logic, built out of the PDK standard cells the AION cell replaces, placed in one
 row with the cells abutted and the inter-cell nets jumpered in Metal2. It is not
 an estimate — it is a real layout, and it goes through the identical chain: the
-same two DRC decks, the same Netgen LVS, the same Magic PEX at mode 3 (R+C), the
-same corners, the same slew and load grid. Any difference the report shows is a
+same two DRC decks, the same Netgen LVS, the same Magic PEX at the same
+`PEX_MODE` (3, full RC, unless lowered), the same corners, the same slew and
+load grid, and the same stimulus. Any difference the report shows is a
 difference between two cells, not between two methods.
 
 For the worked example:
@@ -283,9 +287,12 @@ own diffusion ends, its own taps and its own boundary spacing, three times over.
 
 ### Delay
 
-Measured. Both cells were extracted with Magic at mode 3 and characterized with
-ngspice on the same grid; the comparison is read at its middle point, slew
-0.3294 ns and load 0.0648 pF, at `typ`.
+Measured. Both cells were extracted with Magic at the same `PEX_MODE` and
+characterized with ngspice on the same grid and the same stimulus; the
+comparison is read at its middle point, slew 0.3294 ns and load 0.0648 pF, at
+`typ`. `flow` resolves both of those *once* and hands the same value to each
+side, because a delay measured one way minus a delay measured another way is
+not a difference between two cells.
 
 | metric | candidate | baseline | unit | change | better |
 | --- | ---: | ---: | :--- | ---: | :---: |
@@ -614,7 +621,7 @@ tools/aion_layout_claude/
 The rule: **absent, empty, truncated, unparseable or merely
 not-positively-confirmed evidence is not good evidence.** A missing report is an
 error, never a pass. Every parser in `verification.py` and every measurement in
-`metrics.py` follows it, and two places show what following it properly costs.
+`metrics.py` follows it, and three places show what following it properly costs.
 
 **The KLayout completeness receipt.** KLayout's DRC at `macro` level does not
 necessarily write one database — it can write one `.lyrdb` per rule table. So
@@ -704,6 +711,77 @@ AION_inv_nand2_nor2_1: 2.880 x 3.780 um = 10.8864 um^2 (6 sites, from prBoundary
 ```
 
 Same function, different `source`, and the report always says which.
+
+**A port bound to nothing.** Mode 3 extraction runs Magic's `extresist`, which
+splits a resistive net into segments and renames them — `VSS` becomes `VSS.t0`,
+`VSS.n1`, and so on — and it can finish having bound the `.subckt` *port* to
+none of them. The port is then declared and referenced nowhere, so every device
+on that net is floating. On a ground rail that means no pull-down works and the
+extracted cell drives its output to one rail for every input vector.
+
+Nothing downstream notices on its own. LVS passes, because it runs a *different*
+extraction with no resistance in it, where the net is whole — so the layout is
+genuinely correct and genuinely verified. Characterization then measures the
+broken netlist without complaint and writes a Liberty file whose function is
+`O0 = 1` and which carries no timing arcs at all; the first error surfaces at
+the comparison, an hour later, reading `baseline: ... publishes no timing arcs`
+and pointing at the wrong artifact entirely.
+
+Whether it happens is geometry, not correctness, which is what makes it nasty:
+
+| baseline | width | port bound? |
+|---|---|---|
+| `mux2_1` + `inv_1` | 13 sites | yes — `R9 VSS.t3 VSS 1.85276` |
+| `mux2_1` + `inv_2` | 14 sites | **no** — no resistor names `VSS` at all |
+
+Those two rails are otherwise the same network, resistance for resistance. One
+line is missing from the second, and it is the one that connects the cell to
+ground.
+
+So `run_pex` refuses to return a netlist whose `.subckt` declares a port nothing
+in the body references, and names both the fix and the trap:
+
+```
+port(s) VSS are declared on the '.subckt reference_AION_mux2i_2' line and
+referenced by nothing in it, so every device on those nets is floating and
+the extracted cell does not compute its function.
+   This is Magic's extresist renaming a split net's segments (VSS -> VSS.t0,
+   VSS.n1, ...) without binding the port to any of them. LVS does not see it:
+   it runs a non-RC extraction where the net is whole.
+   Re-run with --pex-mode 2 (C-coupled), which skips extresist entirely and
+   applies to both sides of a comparison, so the two halves stay the same
+   measurement. What that costs is wire resistance; what it buys is a netlist
+   whose rails are connected.
+   Do NOT raise the extresist threshold instead: past the rail's own
+   resistance it drops every R element from the netlist and silently turns
+   full RC into C-only under a _pex3 file name.
+```
+
+The last paragraph is the point of the check. Raising `extresist threshold`
+until the symptom disappears *works*, in the sense that the port comes back —
+and it does so by switching resistance extraction off, taking the `R` elements
+from twelve to zero while the file is still called `_pex3`. That is the failure
+this whole section is about, wearing the costume of a fix.
+
+`--pex-mode 2` is the honest way out, and it is defensible on its own terms
+rather than merely convenient: in the characterization deck the rail port is
+tied to ideal ground, and in silicon the rail is strapped by the power grid
+along its whole length and abuts its neighbours on both sides. Feeding ground in
+at a single label point through up to 474 Ω of rail is arguably *less* physical
+than no rail resistance at all — characterizing with ideal rails is what vendor
+libraries do. What it costs is the signal-net wire resistance, which is real and
+is the reason mode 3 is still the default.
+
+One consequence to hold on to: two cells extracted at different modes are not
+comparable, and they end up in the same merged Liberty. Choose `PEX_MODE` per
+library, not per cell.
+
+This tool keeps `3` as its default, because a mined cell's own wire resistance
+is the thing it exists to measure. The PDK-extension driver
+(`scripts/pdk_cell.py` in `aion_chip`) sets `2` instead: every cell it builds is
+graded against an *abutted PDK baseline*, which is the geometry that trips
+`extresist`, and rail resistance is the parasitic those cells least want
+modelled. See `PEX_MODE_DEFAULT` there for the argument in full.
 
 ## Known gaps
 

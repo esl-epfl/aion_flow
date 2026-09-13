@@ -383,7 +383,11 @@ AION_LAYOUT_VARS = \
 	$(if $(BUILD_DIR_LAYOUT),BUILD_DIR=$(BUILD_DIR_LAYOUT)) \
 	$(if $(FINAL_DIR),FINAL_DIR=$(FINAL_DIR)) \
 	$(if $(CORNERS),CORNERS="$(CORNERS)") \
-	$(if $(JOBS),JOBS=$(JOBS))
+	$(if $(JOBS),JOBS=$(JOBS)) \
+	$(if $(DRIVER),DRIVER=$(DRIVER)) \
+	$(if $(DRIVER_IN),DRIVER_IN=$(DRIVER_IN)) \
+	$(if $(DRIVER_OUT),DRIVER_OUT=$(DRIVER_OUT)) \
+	$(if $(PEX_MODE),PEX_MODE=$(PEX_MODE))
 
 aion-layout-resize: ## Widen a netlist's series stacks into a new, area-capped cell
 	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) resize $(AION_LAYOUT_VARS)

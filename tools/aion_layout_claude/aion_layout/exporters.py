@@ -487,9 +487,9 @@ def check_lef(lef: Path | str, cell: Optional[str] = None) -> LefCheck:
     """Apply the gate ``make pnr`` applies, and report every failure it finds.
 
     The six requirements come from ``output_constr.md``.  The two dimensional
-    ones are delegated to :func:`metrics.lef_macro_geometry` and the pin track
-    rule to :func:`metrics.lef_pin_access`, so that the row height, the site
-    pitch and the routing grid live in exactly one place in this package.
+    ones are delegated to :func:`metrics.lef_macro_geometry` and pin access to
+    :func:`metrics.lef_pin_access`, so that the row height, the site pitch and
+    the via rules live in exactly one place in this package.
     """
     path = Path(lef)
     _readable(path, "LEF")
@@ -536,10 +536,10 @@ def check_lef(lef: Path | str, cell: Optional[str] = None) -> LefCheck:
                 "strap the cell"
             )
 
-    # A pin that covers no routing track survives placement and dies in
-    # detailed routing, an hour later, taking the whole design with it --
-    # DRT-0073 is a hard abort in pin access, not a DRC checker LENIENT=1 can
-    # downgrade.  So it is graded here, with the rest of the abstract.
+    # A pin no via can reach survives placement and dies in detailed routing,
+    # an hour later, taking the whole design with it -- DRT-0073 is a hard
+    # abort in pin access, not a DRC checker LENIENT=1 can downgrade.  So it is
+    # graded here, with the rest of the abstract.
     problems.extend(metrics.lef_pin_access(path, geometry.cell).problems)
 
     return LefCheck(

@@ -38,13 +38,22 @@ because none of them fail until detailed placement otherwise:
 - height exactly `3.78` um (one `CoreSite` row)
 - width an exact multiple of `0.48` um (the `CoreSite` pitch)
 - `PIN VDD` and `PIN VSS` present, so the PDN can strap it
-- **every signal pin covers a routing track** — see below
-- **every signal pin has room for a via to land on it** — see below
+- **every signal pin can be entered by a via** — some `ViaN` overlaps one of
+  its routing-layer port rectangles with its enclosure, and keeps its metal
+  shapes clear of every other net (the `OBS` and the other pins): 0.18 um on
+  `Metal1`, 0.21 um on `Metal2`..`Metal5`. The via may hang off the port.
 
-## Every signal pin must cover a routing track
+The two sections below are how to draw pins that meet that last rule without
+thinking about it: put them on a track, and make them wide enough to hold the
+via. Neither is the rule itself — TritonRoute reaches ports that miss the grid
+or are 0.18 um across when the via has free metal to hang onto — but the pins
+that failed in this flow were squeezed between other shapes, where there is
+none.
 
-This is the one that does not fail at placement. A cell whose pin misses the
-grid places fine, routes globally fine, and then aborts the whole design in
+## Put every signal pin on a routing track
+
+This is the rule that does not fail at placement. A cell whose pin cannot be
+reached places fine, routes globally fine, and then aborts the whole design in
 detailed routing:
 
 ```
@@ -60,7 +69,7 @@ Metal has vertical lines at `x = n * 0.48` um and horizontal lines at
 (`sg13g2_tech.lef`), so it can stop at any coordinate on that axis but is
 pinned to a track on the other one:
 
-| Layer    | `DIRECTION` | A pin on it must contain |
+| Layer    | `DIRECTION` | Draw a pin on it across  |
 | -------- | ----------- | ------------------------ |
 | `Metal1` | HORIZONTAL  | a `y = n * 0.42` line    |
 | `Metal2` | VERTICAL    | an `x = n * 0.48` line   |
@@ -84,9 +93,9 @@ Two ways out when the port cannot grow where it sits:
 - drop a `Via1` and put the port on `Metal2` instead, where the rule becomes
   an `x = n * 0.48` line
 
-Cells are cheaper to check than to re-route: `make export` grades this and
-refuses to publish, and `make pnr` refuses to start. All 283 signal pins of
-the PDK `sg13g2_stdcell` library satisfy it.
+Cells are cheaper to check than to re-route: `make verify` and `make export`
+grade pin access on the LEF magic writes, and `make pnr` refuses to start. All
+283 signal pins of the PDK `sg13g2_stdcell` library pass.
 
 ## Covering a track is not enough: the via has to land
 
@@ -97,12 +106,12 @@ does contain the track at `y = 1.260`, and detailed routing still aborted with
 has to get *down* to it, and 0.18 um leaves nowhere to put the via.
 
 Every `ViaN` (N = 1..4) in `sg13g2_tech.lef` is a 0.19 um cut enclosed by
-**0.29 x 0.21 um on the metal below**, in either orientation. The long side
-lies along the wire and may hang off the end of the port onto the rest of the
-net — `sg13g2_nand4_1`'s `A` relies on that, its widest port `RECT` being
-0.275 um. The short side may not. So:
+**0.29 x 0.21 um on the metal below**, in either orientation. The enclosure
+may hang off the port — `sg13g2_nand4_1`'s `A` relies on that, its widest port
+`RECT` being 0.275 um — but only onto `Metal1` no other net comes within
+0.18 um of, and a port squeezed into a channel has none. So:
 
-> a port `RECT` must be at least **0.21 um across in both directions**.
+> draw a port `RECT` at least **0.21 um across in both directions**.
 
 That is 0.05 um more than the `Metal1` minimum width, so a port drawn at
 minimum width is never enough on its own — it has to be widened where the via
@@ -111,11 +120,10 @@ and 2.565 um long, crossing six tracks).
 
 ## Nothing may sit where the via lands
 
-`make export` runs `lef write -hide -pinonly`, which writes **only the
-labelled rectangle as a `PORT` and every other shape as `OBS`** — the rest of
-the port's own net included. `AION_nand2_o21ai_0` failed on that. It routes
-`O0` up to `Metal2` correctly, but the label is on the `Metal1` end, so the
-strap came out as
+To the router, every shape in the LEF that is not the pin's own `PORT`
+belongs to another net — the `OBS` and every other pin. `AION_nand2_o21ai_0`
+failed on that. It routes `O0` up to `Metal2` correctly, but the label is on
+the `Metal1` end, and the strap came out as
 
 ```
 OBS
@@ -135,6 +143,14 @@ out are therefore:
   note that a strap drawn at the `Metal2` minimum width of 0.20 um is 10 nm
   under the landing-pad rule above, so draw it 0.21 um wide when it is a port
 - keep the upper metal off the port, so the via up has somewhere to go
+
+"Off" means **0.21 um clear**, not merely not overlapping: the via's `Metal2`
+pad is a `Metal2` shape like any other. `AION_mux2i_1/I2` has another net's
+`Metal2` riser 15 nm beside each of its gate pads, with other nets' `Metal1`
+everywhere a via could slide to, and detailed routing finds no access point.
+`AION_mux2_0/I0` has a strap 5 nm beside its port as well, but free `Metal1`
+on the other side: the router puts its `Via1` 60 nm off the port, the pad
+0.265 um from the strap, and routes every instance.
 
 ## Rail tap contacts go at `x = 160 + 480k`
 

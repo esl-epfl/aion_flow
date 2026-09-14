@@ -23,6 +23,7 @@ a CDL netlist (which is not connectivity).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,7 @@ def lef_text(
     width=2.88,
     height=3.78,
     pins=("I0", "I1", "I2", "O0", "VDD", "VSS"),
-    pin_rect=(0.200, 0.310, 0.490, 0.530),
+    pin_rect=(0.150, 0.310, 0.440, 0.530),
     obs=(),
 ):
     """A LEF macro with one knob per requirement, so each can be broken alone.
@@ -50,7 +51,9 @@ def lef_text(
     ``pin_rect`` is the Metal1 port of the first pin; each further pin is the
     same rectangle ``PIN_STEP`` um to the right, because pins are different nets
     and a via has to keep its spacing from all of them.  The default straddles
-    y = 0.42 um, the first Metal1 track.  ``obs`` is ``(layer, rect)`` pairs
+    y = 0.42 um, the first Metal1 track, and puts the sixth pin's right edge at
+    x = 2.79 um: half the 0.18 um Metal1 spacing inside the 2.88 um cell, as
+    close as the abutment rule allows.  ``obs`` is ``(layer, rect)`` pairs
     written to an OBS block, which is how a test takes a pin's via access away.
     """
     lines = ["VERSION 5.7 ;", "BUSBITCHARS \"[]\" ;", "", f"MACRO {cell}"]
@@ -94,8 +97,9 @@ PIN_STEP = 0.47
 
 #: Metal2 across the first pin of the default fixture and well past it, so that
 #: no via reaching that pin keeps its pad 0.21 um clear, while the second pin
-#: still has room for one.
-STRAP_OVER_FIRST_PIN = (("Metal2", (0.150, 0.000, 0.400, 1.200)),)
+#: still has room for one.  It starts 0.355 um up, clear of the PDN's rail
+#: via pad, so that the only thing wrong with it is where it sits over the pin.
+STRAP_OVER_FIRST_PIN = (("Metal2", (0.150, 0.355, 0.450, 1.200)),)
 
 
 def write_lef(tmp_path, **kwargs):
@@ -283,6 +287,288 @@ def test_a_power_pin_off_the_grid_is_not_a_problem(tmp_path):
     assert check.ok, (
         f"only signal pins answer to the router's track grid: {check.problems}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Via cuts: magic writes none, the router has to see them
+# ---------------------------------------------------------------------------
+
+_CUT_BODY = f"""\
+MACRO {CELL}
+  CLASS CORE ;
+  SIZE 2.880 BY 3.780 ;
+  PIN I0
+    DIRECTION INPUT ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.305 1.450 0.785 1.790 ;
+      LAYER Metal2 ;
+        RECT 0.570 0.400 0.770 1.745 ;
+    END
+  END I0
+  PIN O0
+    PORT
+      LAYER Metal1 ;
+        RECT 2.000 1.450 2.300 1.790 ;
+    END
+  END O0
+  OBS
+      LAYER Metal2 ;
+        RECT 1.950 1.400 2.350 2.600 ;
+  END
+END {CELL}
+END LIBRARY
+"""
+
+#: xnor2_1's I0 cut, under both of the pin's metals; and one under O0's Metal1
+#: whose Metal2 is an obstruction.
+_CUTS = {"Via1": [(0.575, 1.505, 0.765, 1.695), (2.055, 1.525, 2.245, 1.715)]}
+
+
+def test_a_cut_under_both_of_a_pins_metals_goes_into_its_port():
+    """AION_xnor2_1/I0: the cut TritonRoute could not see, and landed a Via1 beside."""
+    body, notes = exporters._add_cut_layers(_CUT_BODY, CELL, _CUTS)
+
+    i0 = re.search(r"PIN I0\n(.*?)END I0", body, re.S).group(1)
+    assert "LAYER Via1 ;\n        RECT 0.575 1.505 0.765 1.695 ;\n    END" in i0, i0
+    obs = re.search(r"  OBS\n(.*?)\n  END\n", body, re.S).group(1)
+    assert "RECT 2.055 1.525 2.245 1.715" in obs, (
+        f"O0's Metal2 is an obstruction, so its cut is too: {obs}"
+    )
+    assert "RECT 2.055" not in re.search(r"PIN O0\n(.*?)END O0", body, re.S).group(1)
+    assert len(notes) == 1 and "2 Via1" in notes[0] and "1 in pin PORTs and 1 in OBS" in notes[0], notes
+
+
+def test_a_macro_with_no_obs_gets_one_for_its_cuts():
+    no_obs = re.sub(r"  OBS\n.*?\n  END\n", "", _CUT_BODY, flags=re.S)
+    body, _ = exporters._add_cut_layers(no_obs, CELL, {"Via1": [_CUTS["Via1"][1]]})
+
+    assert re.search(
+        rf"  OBS\n      LAYER Via1 ;\n        RECT 2.055 1.525 2.245 1.715 ;\n  END\nEND {CELL}\n",
+        body,
+    ), body
+
+
+def test_a_cell_with_no_cuts_is_left_exactly_as_magic_wrote_it():
+    assert exporters._add_cut_layers(_CUT_BODY, CELL, {}) == (_CUT_BODY, ())
+
+
+# ---------------------------------------------------------------------------
+# Rail band: pin metal the router must not land on beside the PDN's via pads
+# ---------------------------------------------------------------------------
+
+#: AION_xnor2_4's I0 as published: a Metal2 U whose bar sits at the lowest y the
+#: rail rule allows, with Metal1 pads on the risers and a Via1 up to each.  O0
+#: reaches the top band, I1 stays clear of both; VSS carries Metal2 of its own
+#: and the OBS a bar of another net, neither of which is a pin to land on.
+_BAND_BODY = f"""\
+MACRO {CELL}
+  CLASS CORE ;
+  SIZE 2.880 BY 3.780 ;
+  PIN I0
+    DIRECTION INPUT ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.305 1.450 0.785 1.790 ;
+      LAYER Metal2 ;
+        RECT 0.570 0.555 0.770 1.745 ;
+        RECT 2.115 0.555 2.315 1.745 ;
+        RECT 0.570 0.355 2.315 0.555 ;
+    END
+  END I0
+  PIN O0
+    PORT
+      LAYER Metal2 ;
+        RECT 1.000 2.900 1.200 3.420 ;
+    END
+  END O0
+  PIN I1
+    PORT
+      LAYER Metal2 ;
+        RECT 1.300 1.000 1.500 2.000 ;
+    END
+  END I1
+  PIN VSS
+    USE GROUND ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.000 -0.220 2.880 0.220 ;
+      LAYER Metal2 ;
+        RECT 2.500 0.400 2.700 0.600 ;
+    END
+  END VSS
+  OBS
+      LAYER Metal2 ;
+        RECT 0.200 0.400 0.400 1.000 ;
+  END
+END {CELL}
+END LIBRARY
+"""
+
+
+def _block(body, name):
+    return re.search(rf"PIN {name}\n(.*?)END {name}", body, re.S).group(1)
+
+
+def test_pin_metal2_in_the_rail_band_is_published_as_an_obstruction():
+    """The split that took detailed routing from 23 stuck violations to 0.
+
+    Under every power strap the PDN's rail via pads sit where the router landed
+    on bars like I0's, at y = 0.42 um.  Only the part within 0.565 um of a rail
+    line moves, the rest of the pin stays a pin, and the note says so.
+    """
+    body, notes = exporters._rail_band_to_obs(_BAND_BODY, CELL)
+
+    i0 = _block(body, "I0")
+    assert re.findall(r"RECT [\d. ]+", i0.split("LAYER Metal2 ;")[1]) == [
+        "RECT 0.570 0.565 0.770 1.745 ",
+        "RECT 2.115 0.565 2.315 1.745 ",
+    ], f"the risers stay pin from y = 0.565 up, the bar leaves: {i0}"
+    assert "RECT 0.305 1.450 0.785 1.790" in i0, "Metal1 is not in the band's rule"
+    assert "RECT 1.000 2.900 1.200 3.215" in _block(body, "O0"), "the top band splits too"
+    assert _block(body, "I1") == _block(_BAND_BODY, "I1"), "a pin clear of both bands is untouched"
+    assert _block(body, "VSS") == _block(_BAND_BODY, "VSS"), "a supply is not a pin to land on"
+
+    obs = re.search(r"  OBS\n(.*?)\n  END\n", body, re.S).group(1)
+    for rect in ("0.200 0.400 0.400 1.000",               # the OBS it already had
+                 "0.570 0.555 0.770 0.565", "2.115 0.555 2.315 0.565",
+                 "0.570 0.355 2.315 0.555", "1.000 3.215 1.200 3.420"):
+        assert f"RECT {rect} ;" in obs, f"{rect} missing from OBS: {obs}"
+    assert len(notes) == 1 and "published 4 rect(s)" in notes[0] and "PIN I0, O0" in notes[0], notes
+
+
+def test_a_layer_the_band_empties_is_dropped():
+    """A LAYER line with no geometry under it is not something to hand a LEF reader."""
+    bar_only = _BAND_BODY.replace(
+        "        RECT 0.570 0.555 0.770 1.745 ;\n        RECT 2.115 0.555 2.315 1.745 ;\n", "")
+    body, _ = exporters._rail_band_to_obs(bar_only, CELL)
+
+    assert "LAYER Metal2" not in _block(body, "I0"), _block(body, "I0")
+    assert "LAYER Metal1 ;\n        RECT 0.305 1.450 0.785 1.790 ;\n    END" in _block(body, "I0")
+
+
+def test_a_cut_under_the_moved_metal_follows_it_into_obs():
+    """Cuts are assigned after the split: a pin's port no longer covers one in the band."""
+    body, _ = exporters._rail_band_to_obs(_BAND_BODY, CELL)
+    cuts = {"Via1": [(0.575, 1.505, 0.765, 1.695), (1.000, 0.360, 1.190, 0.550)]}
+    with_metal1 = body.replace(
+        "        RECT 0.305 1.450 0.785 1.790 ;",
+        "        RECT 0.305 1.450 0.785 1.790 ;\n        RECT 0.950 0.300 1.240 0.610 ;")
+    body, _ = exporters._add_cut_layers(with_metal1, CELL, cuts)
+
+    assert "RECT 0.575 1.505 0.765 1.695" in _block(body, "I0"), "the riser's cut is still the pin's"
+    obs = re.search(r"  OBS\n(.*?)\n  END\n", body, re.S).group(1)
+    assert "RECT 1.000 0.360 1.190 0.550" in obs, obs
+
+
+def test_a_cell_clear_of_the_band_is_left_exactly_as_magic_wrote_it():
+    clear = re.sub(r"  PIN I0\n.*?END I0\n  PIN O0\n.*?END O0\n", "", _BAND_BODY, flags=re.S)
+    assert exporters._rail_band_to_obs(clear, CELL) == (clear, ())
+
+
+def test_a_macro_with_no_obs_gets_one_for_the_band():
+    no_obs = re.sub(r"  OBS\n.*?\n  END\n", "", _BAND_BODY, flags=re.S)
+    body, _ = exporters._rail_band_to_obs(no_obs, CELL)
+
+    assert re.search(
+        rf"  OBS\n      LAYER Metal2 ;\n(        RECT [\d. ]+;\n){{4}}  END\nEND {CELL}\n", body
+    ), body
+
+
+# ---------------------------------------------------------------------------
+# Liberty: one file, or one per corner, never both
+# ---------------------------------------------------------------------------
+
+_CORNER_TAGS = ("typ_1p20V_25C", "slow_1p08V_125C", "fast_1p32V_m40C")
+
+
+def _libs(directory, names):
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (directory / name).write_text(f"library ({name}) {{ }}\n")
+    return [directory / name for name in names]
+
+
+def test_the_corner_tags_are_the_ones_make_pnr_reads():
+    """collect_cells.LIB_CORNERS in aion_chip spells the same three suffixes."""
+    from aion_layout.characterize import DEFAULT_CORNERS
+    assert tuple(corner.tag for corner in DEFAULT_CORNERS) == _CORNER_TAGS
+
+
+def test_a_publish_per_corner_removes_the_single_liberty_an_earlier_one_left(tmp_path):
+    """Beside a corner set, <cell>.lib is a second timing model `make pnr` refuses."""
+    out = tmp_path / "final"
+    _libs(out, [f"{CELL}.lib"])
+    corner_libs = _libs(tmp_path / "char", [f"{CELL}_{tag}.lib" for tag in _CORNER_TAGS])
+
+    exporters._publish_libs(corner_libs, CELL, out)
+
+    assert sorted(p.name for p in out.glob("*.lib")) == sorted(
+        f"{CELL}_{tag}.lib" for tag in _CORNER_TAGS)
+
+
+def test_a_single_corner_publish_removes_the_corner_set_an_earlier_one_left(tmp_path):
+    out = tmp_path / "final"
+    _libs(out, [f"{CELL}_{tag}.lib" for tag in _CORNER_TAGS] + ["AION_other_slow_1p08V_125C.lib"])
+    typ = _libs(tmp_path / "char", [f"{CELL}_typ_1p20V_25C.lib"])
+
+    exporters._publish_libs(typ, CELL, out)
+
+    assert sorted(p.name for p in out.glob("*.lib")) == sorted([
+        "AION_other_slow_1p08V_125C.lib", f"{CELL}.lib"]), "another cell's files are not touched"
+
+
+def test_make_export_publishes_the_directions_the_flow_does(tmp_path, monkeypatch):
+    """A two-output cell's second output is an OUTPUT, not the netlist guess's INPUT.
+
+    `make export` guessed directions from the transistors, and the guess knows
+    one output: re-exported on its own, AION_xor2_5 came out with O1 declared an
+    input in the LEF and missing from the Verilog model, while `flow` -- which
+    reads the generator's port sidecar -- had published it as an output.
+    """
+    import argparse
+    import json
+
+    from aion_layout import cli
+
+    gds = tmp_path / f"{CELL}.gds"
+    gds.write_bytes(b"not read")
+    (tmp_path / f"{CELL}.gds.ports.json").write_text(json.dumps([
+        {"name": name, "layer": "Metal1", "direction": direction, "rect": [0, 0, 1, 1]}
+        for name, direction in (("I0", "INPUT"), ("O0", "OUTPUT"), ("O1", "OUTPUT"),
+                                ("VDD", "POWER"), ("VSS", "GROUND"))]))
+    spice = tmp_path / f"{CELL}.spice"
+    spice.write_text(f".subckt {CELL} I0 O0 O1 VDD VSS\n.ends\n")
+    lib = tmp_path / f"{CELL}.lib"
+    lib.write_text("library (x) { }\n")
+
+    seen = {}
+
+    def fake_export_all(**kwargs):
+        seen.update(kwargs)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(exporters, "export_all", fake_export_all)
+    args = argparse.Namespace(cell=CELL, gds=str(gds), spice=str(spice), lib=[str(lib)],
+                              pex_spice=None, out=str(tmp_path / "final"))
+    with pytest.raises(SystemExit):
+        cli.cmd_export(args)
+
+    assert seen["directions"]["O1"] == "output", seen["directions"]
+    assert seen["directions"]["O0"] == "output" and seen["directions"]["I0"] == "input"
+
+
+def test_gds_cuts_reads_every_via_layer(gds_factory):
+    """Via1 at 19/0 and Via2 at 29/0, per sg13g2.map; a duplicate is one cut."""
+    gds = gds_factory(extra_layers={
+        (19, 0): (0.575, 1.505, 0.765, 1.695),
+        (29, 0): (1.000, 1.000, 1.190, 1.190),
+    })
+    cuts = exporters.gds_cuts(gds, "SYNTH")
+    assert cuts == {
+        "Via1": [(0.575, 1.505, 0.765, 1.695)],
+        "Via2": [(1.0, 1.0, 1.19, 1.19)],
+    }, cuts
 
 
 def test_an_unmeasurable_lef_raises_rather_than_verdicts(tmp_path):

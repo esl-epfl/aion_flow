@@ -35,6 +35,7 @@ import shutil
 import pytest
 
 from aion_layout.metrics import CellGeometry
+from aion_layout.pin_access import PinAccessReport
 from aion_layout.verification import (
     parse_klayout_reports,
     parse_magic_drc_report,
@@ -267,23 +268,54 @@ END LIBRARY
 """
 
 
+def _written(gds_path, cell, out, **kwargs):
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_ABSTRACT_LEF)
+    return out
+
+
+def _routed(result, *problems):
+    """A stand-in for run_pin_access: the container is never reached from here."""
+    return lambda lef, cell, work, **kwargs: PinAccessReport(cell, result, problems)
+
+
 def test_abstract_problems_grades_the_lef_magic_wrote(monkeypatch, tmp_path):
     """The abstract is graded by the same check_lef that publishing runs."""
     gds = tmp_path / f"{CELL}.gds"
     gds.write_bytes(b"not read: export_lef is replaced")
 
-    def written(gds_path, cell, out, **kwargs):
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(_ABSTRACT_LEF)
-        return out
-
-    monkeypatch.setattr(steps, "export_lef", written)
+    monkeypatch.setattr(steps, "export_lef", _written)
+    monkeypatch.setattr(steps, "run_pin_access", _routed("PASS"))
     errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
 
     assert errors == []
     assert len(failures) == 1 and "PIN I0" in failures[0], failures
     assert failures[0].startswith("abstract (LEF): "), (
         f"the reason has to say which artifact it is about: {failures}"
+    )
+
+
+def test_abstract_problems_asks_tritonroute_too(monkeypatch, tmp_path):
+    """A pin TritonRoute cannot reach fails the loop; a run it could not grade is ERROR.
+
+    The static rules are necessary, not sufficient, so the router's own word
+    reaches the model inside the loop rather than first at publish, where a
+    refusal is a cell that silently never reaches implementation/cells/.
+    """
+    gds = tmp_path / f"{CELL}.gds"
+    gds.write_bytes(b"not read: export_lef is replaced")
+    monkeypatch.setattr(steps, "export_lef", _written)
+
+    monkeypatch.setattr(steps, "run_pin_access", _routed("FAIL", "PIN O0: no access point"))
+    errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
+    assert errors == []
+    assert "abstract (TritonRoute): PIN O0: no access point" in failures, failures
+
+    monkeypatch.setattr(steps, "run_pin_access", _routed("ERROR", "OpenROAD did not finish"))
+    errors, failures = steps.abstract_problems(gds, CELL, tmp_path)
+    assert len(errors) == 1 and "OpenROAD did not finish" in errors[0], errors
+    assert not any("TritonRoute" in f for f in failures), (
+        f"a router that did not run says nothing about the cell: {failures}"
     )
 
 

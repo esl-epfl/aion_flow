@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, NoReturn, Optional, Sequence, Tuple
 
 from . import metrics
+from .characterize import DEFAULT_CORNERS
 from .liberty import LibertyError, read_liberty
 from .logic import LogicError, TruthTable, truth_table
 from .metrics import GRID_TOL_UM, CellGeometry, MetricsError
@@ -336,6 +337,306 @@ def _normalise_macro(
     return body, tuple(notes)
 
 
+#: The cut layers a cell may draw: the GDS pair from
+#: ``libs.tech/klayout/tech/sg13g2.map``, and the metals below and above.  The
+#: generators draw Via1 only today; the other three are here so that a cell that
+#: stacks higher is not published with its vias silently missing.
+CUT_LAYERS: Dict[str, Tuple[Tuple[int, int], str, str]] = {
+    "Via1": ((19, 0), "Metal1", "Metal2"),
+    "Via2": ((29, 0), "Metal2", "Metal3"),
+    "Via3": ((49, 0), "Metal3", "Metal4"),
+    "Via4": ((66, 0), "Metal4", "Metal5"),
+}
+
+_PORT_OPEN_RE = re.compile(r"^([ \t]*)PORT[ \t]*$")
+_OBS_OPEN_RE = re.compile(r"^([ \t]*)OBS[ \t]*$")
+_BLOCK_END_RE = re.compile(r"^[ \t]*END[ \t]*$")
+_LAYER_LINE_RE = re.compile(r"^[ \t]*LAYER[ \t]+(\S+)[ \t]*;")
+_RECT_LINE_RE = re.compile(
+    r"^([ \t]*)RECT[ \t]+([-0-9.eE+]+)[ \t]+([-0-9.eE+]+)[ \t]+([-0-9.eE+]+)[ \t]+([-0-9.eE+]+)[ \t]*;"
+)
+
+#: How far from each rail line a signal pin's metal is published as obstruction
+#: instead of pin: the first Metal3 track, y = 0.42 um, plus half the taller
+#: Metal2 enclosure of a ``Via2`` (0.29 um).  See :func:`_rail_band_to_obs`.
+RAIL_BAND_UM = 0.565
+
+#: The pin layers :data:`RAIL_BAND_UM` applies to.  Metal2 is the only one it was
+#: measured on, and the only one above Metal1 any generator draws.
+RAIL_BAND_LAYERS = ("Metal2",)
+
+Rect = Tuple[float, float, float, float]
+
+
+def gds_cuts(gds: Path | str, cell: str) -> Dict[str, List[Rect]]:
+    """Every cut ``cell`` draws on each of :data:`CUT_LAYERS`, in um.
+
+    Merged and decomposed, so a via drawn twice on top of itself is one cut.
+    """
+    try:
+        import klayout.db as pya
+    except Exception as exc:  # pragma: no cover - klayout is a hard dependency
+        raise ExportError(f"klayout.db unavailable: {exc}") from exc
+    layout = pya.Layout()
+    layout.read(str(gds))
+    top = layout.cell(cell)
+    if top is None:
+        raise ExportError(f"{Path(gds).name} has no cell named {cell!r}")
+    dbu = layout.dbu
+    cuts: Dict[str, List[Rect]] = {}
+    for name, (pair, _, _) in CUT_LAYERS.items():
+        index = layout.find_layer(*pair)
+        if index is None:
+            continue
+        region = pya.Region(top.begin_shapes_rec(index)).merged()
+        boxes = sorted(
+            tuple(round(v * dbu, 6) for v in (box.left, box.bottom, box.right, box.top))
+            for box in (part.bbox() for part in region.decompose_trapezoids())
+        )
+        if boxes:
+            cuts[name] = boxes
+    return cuts
+
+
+def _add_cut_layers(
+    body: str, cell: str, cuts: Mapping[str, Sequence[Rect]]
+) -> Tuple[str, Tuple[str, ...]]:
+    """Write the cell's via cuts into the macro, where the router will see them.
+
+    Magic's ``lef write`` emits no cut layer at all -- verified on 8.3.678, with
+    and without ``-pinonly`` -- while the PDK's own LEF declares every cut its
+    cells draw (``sg13g2_sdfbbp_1``).  A router that cannot see a cut lands its
+    own via beside it: in step 7 TritonRoute accessed ``AION_xnor2_1/I0`` with a
+    ``Via1`` on a track crossing 0.19 um from the cell's hidden one, and the two
+    cuts merged into a ``V1.a`` violation.  With the cut in the LEF, OpenROAD's
+    ``pin_access`` reaches the same pin on its Metal2 instead.
+
+    A cut goes into a pin's ``PORT`` when that pin's port covers it on both the
+    metal below and the metal above; anything else goes into ``OBS``, which is
+    the reading :func:`metrics.lef_pin_access` already takes of metal half in
+    one and half in the other.
+    """
+    if not cuts:
+        return body, ()
+    try:
+        import klayout.db as pya
+    except Exception as exc:  # pragma: no cover - klayout is a hard dependency
+        raise ExportError(f"klayout.db unavailable: {exc}") from exc
+
+    def region(rects: Iterable[Rect]) -> "pya.Region":
+        merged = pya.Region()
+        for x1, y1, x2, y2 in rects:
+            merged.insert(pya.Box(round(x1 * 1000), round(y1 * 1000),
+                                  round(x2 * 1000), round(y2 * 1000)))
+        return merged.merged()
+
+    ports = {
+        name: metrics._layer_rects(pin_body)
+        for name, pin_body in metrics._LEF_PIN_RE.findall(body)
+    }
+    metal = {
+        (name, layer): region(r[1:] for r in rects if r[0] == layer)
+        for name, rects in ports.items()
+        for layer in {m for _, below, above in CUT_LAYERS.values() for m in (below, above)}
+    }
+    owned: Dict[str, Dict[str, List[Rect]]] = {}
+    for layer, rects in cuts.items():
+        _, below, above = CUT_LAYERS[layer]
+        for rect in rects:
+            cut = region([rect])
+            owner = next(
+                (name for name in ports
+                 if (cut - metal[name, below]).is_empty()
+                 and (cut - metal[name, above]).is_empty()),
+                "OBS",
+            )
+            owned.setdefault(owner, {}).setdefault(layer, []).append(rect)
+
+    def layer_lines(by_layer: Mapping[str, Sequence[Rect]]) -> List[str]:
+        # Magic's own indentation, in PORT and OBS alike.
+        out: List[str] = []
+        for layer in CUT_LAYERS:
+            if layer in by_layer:
+                out.append(f"      LAYER {layer} ;")
+                out.extend(f"        RECT {x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f} ;"
+                           for x1, y1, x2, y2 in by_layer[layer])
+        return out
+
+    lines = body.splitlines()
+    out: List[str] = []
+    pin: Optional[str] = None
+    placed = set()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        opening = _PIN_OPEN_RE.match(line)
+        closing = _PIN_CLOSE_RE.match(line)
+        if opening is not None:
+            pin = opening.group(2)
+        elif closing is not None and closing.group(1) == pin:
+            pin = None
+        owner = pin if pin is not None else "OBS"
+        block = (_PORT_OPEN_RE if pin is not None else _OBS_OPEN_RE).match(line)
+        if block is None or owner not in owned or owner in placed:
+            out.append(line)
+            index += 1
+            continue
+        # The block down to its bare END, then the cuts, then that END.
+        end = index + 1
+        while end < len(lines) and not _BLOCK_END_RE.match(lines[end]):
+            end += 1
+        out.extend(lines[index:end])
+        out.extend(layer_lines(owned[owner]))
+        placed.add(owner)
+        index = end
+
+    if "OBS" in owned and "OBS" not in placed:
+        macro_end = next(
+            (i for i, line in enumerate(out)
+             if re.match(rf"^[ \t]*END[ \t]+{re.escape(cell)}[ \t]*$", line)),
+            None,
+        )
+        if macro_end is None:
+            raise ExportError(f"the MACRO {cell} block has no 'END {cell}' to write OBS cuts before")
+        out[macro_end:macro_end] = ["  OBS", *layer_lines(owned["OBS"]), "  END"]
+        placed.add("OBS")
+
+    if set(owned) - placed:
+        raise ExportError(
+            f"no PORT to write the cuts of PIN {', '.join(sorted(set(owned) - placed))} "
+            f"into in the LEF of {cell}"
+        )
+    in_obs = sum(len(rects) for rects in owned.get("OBS", {}).values())
+    total = sum(len(rects) for rects in cuts.values())
+    drawn = ", ".join(f"{len(rects)} {layer}" for layer, rects in cuts.items())
+    note = (
+        f"added {drawn} cut(s) from the GDS, {total - in_obs} in pin PORTs and "
+        f"{in_obs} in OBS: magic writes no cut layers, and a router that cannot see "
+        "a cell's via lands its own beside it"
+    )
+    return "\n".join(out) + ("\n" if body.endswith("\n") else ""), (note,)
+
+
+def _rail_band_to_obs(body: str, cell: str) -> Tuple[str, Tuple[str, ...]]:
+    """Publish the part of each signal pin's Metal2 near a rail as an obstruction.
+
+    Wherever a power strap crosses a row, the PDN drops a via stack onto both
+    rails, with a 0.29 um Metal2 pad centred on the rail line.  A pin bar the
+    rail rule allows at y = 0.355 um is exactly legal against that pad, but the
+    router does not stop at the bar's edge.  It lands on the bar along the
+    Metal3 track at y = 0.42 um, and its Metal2 wire or Via2 enclosure there
+    reaches down to 0.315 um, 0.17 um from the pad top where 0.21 is needed.  In
+    step 7 that was every one of the 14 violations detailed routing never
+    cleared: 13 of 164 such pin bars under a strap failed, 0 of the 1264 not
+    under one.
+
+    So every signal-pin Metal2 rectangle is split at :data:`RAIL_BAND_UM` from
+    both rail lines: the part inside that band goes to ``OBS``, the rest stays in
+    the ``PORT``, and a ``LAYER`` left with no rectangles is dropped.  The drawn
+    metal does not move and stays the pin's net; the router just enters the pin
+    somewhere else.  On the same placement, with every AION instance swapped to
+    abstracts split this way, detailed routing reached 0 violations by
+    iteration 7 against 23 unsplit.  Run before :func:`_add_cut_layers`, so a
+    cut under the moved metal is written to ``OBS`` with it.
+    """
+    size = metrics._LEF_SIZE_RE.search(body)
+    if size is None:
+        raise ExportError(f"the MACRO {cell} block carries no SIZE line to measure the rails from")
+    height = float(size.group(2))
+    low, high = RAIL_BAND_UM, height - RAIL_BAND_UM
+
+    supplies = set()
+    for name, pin_body in metrics._LEF_PIN_RE.findall(body):
+        use = metrics._LEF_USE_RE.search(pin_body)
+        if (use.group(1).upper() in ("POWER", "GROUND") if use is not None
+                else name.upper() in metrics.POWER_PIN_NAMES):
+            supplies.add(name)
+
+    out: List[str] = []
+    moved: List[Tuple[str, float, float, float, float]] = []
+    pins_moved: List[str] = []
+    pin: Optional[str] = None
+    layer: Optional[str] = None
+    layer_line: Optional[int] = None
+    kept = cut = 0
+
+    def close_layer() -> None:
+        # A LAYER whose every rectangle went to OBS would declare no geometry.
+        nonlocal layer, layer_line, kept, cut
+        if layer_line is not None and cut and not kept:
+            del out[layer_line]
+        layer, layer_line, kept, cut = None, None, 0, 0
+
+    for line in body.splitlines():
+        opening, closing = _PIN_OPEN_RE.match(line), _PIN_CLOSE_RE.match(line)
+        layer_match, rect = _LAYER_LINE_RE.match(line), _RECT_LINE_RE.match(line)
+        if opening is not None:
+            pin = opening.group(2)
+        elif (closing is not None and closing.group(1) == pin) or _BLOCK_END_RE.match(line):
+            close_layer()
+            if closing is not None:
+                pin = None
+        elif layer_match is not None:
+            close_layer()
+            layer, layer_line = layer_match.group(1), len(out)
+        elif (rect is not None and pin is not None and pin not in supplies
+              and layer in RAIL_BAND_LAYERS):
+            indent = rect.group(1)
+            x1, y1, x2, y2 = (float(v) for v in rect.group(2, 3, 4, 5))
+            y1, y2 = min(y1, y2), max(y1, y2)
+            x1, x2 = min(x1, x2), max(x1, x2)
+            pieces = [(y1, min(y2, low)), (max(y1, high), y2)]
+            inside = [(a, b) for a, b in pieces if b - a > GRID_TOL_UM]
+            if inside:
+                moved.extend((layer, x1, a, x2, b) for a, b in inside)
+                if pin not in pins_moved:
+                    pins_moved.append(pin)
+                cut += 1
+                top, bottom = max(y1, low), min(y2, high)
+                if bottom - top <= GRID_TOL_UM:
+                    continue
+                line = f"{indent}RECT {x1:.3f} {top:.3f} {x2:.3f} {bottom:.3f} ;"
+            kept += 1
+        elif rect is not None and layer_line is not None:
+            kept += 1
+        out.append(line)
+
+    if not moved:
+        return body, ()
+
+    obs_lines: List[str] = []
+    for obs_layer in RAIL_BAND_LAYERS:
+        rects = [r for r in moved if r[0] == obs_layer]
+        if rects:
+            obs_lines.append(f"      LAYER {obs_layer} ;")
+            obs_lines.extend(f"        RECT {x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f} ;"
+                             for _, x1, y1, x2, y2 in rects)
+    obs_open = next((i for i, line in enumerate(out) if _OBS_OPEN_RE.match(line)), None)
+    if obs_open is not None:
+        obs_end = next((i for i in range(obs_open + 1, len(out)) if _BLOCK_END_RE.match(out[i])), None)
+        if obs_end is None:
+            raise ExportError(f"the OBS block of {cell} has no END")
+        out[obs_end:obs_end] = obs_lines
+    else:
+        macro_end = next(
+            (i for i, line in enumerate(out)
+             if re.match(rf"^[ \t]*END[ \t]+{re.escape(cell)}[ \t]*$", line)),
+            None,
+        )
+        if macro_end is None:
+            raise ExportError(f"the MACRO {cell} block has no 'END {cell}' to write OBS before")
+        out[macro_end:macro_end] = ["  OBS", *obs_lines, "  END"]
+
+    note = (
+        f"published {len(moved)} rect(s) of signal-pin "
+        f"{'/'.join(RAIL_BAND_LAYERS)} within {RAIL_BAND_UM} um of a rail line as OBS "
+        f"(PIN {', '.join(pins_moved)}): under a power strap the PDN's rail via pad "
+        "sits there, and a router wire or Via2 landing on pin metal that low comes "
+        "within spacing of it; the metal is unchanged"
+    )
+    return "\n".join(out) + ("\n" if body.endswith("\n") else ""), (note,)
+
+
 def export_lef(
     gds: Path | str,
     cell: str,
@@ -361,6 +662,14 @@ def export_lef(
     routing aborts with ``DRT-0073``.  Without it magic writes the real
     rectangles, and a Metal2 strap blocks a pin only where it actually crosses
     one.
+
+    Magic writes no cut layers, so the via cuts are read out of the GDS and
+    written into the pins' ``PORT`` and the ``OBS`` afterwards, by
+    :func:`_add_cut_layers`; a LEF that ends up declaring a different number of
+    cuts than the GDS draws is refused.  Before that, signal-pin Metal2 within
+    :data:`RAIL_BAND_UM` of a rail line is moved from the pin to ``OBS`` by
+    :func:`_rail_band_to_obs`, so the router never lands on it beside the power
+    grid's rail via pads.
 
     ``directions`` is optional and additive: when a caller knows a pin is an
     output, saying so here is the only way the published LEF can say so, because
@@ -437,11 +746,37 @@ def export_lef(
         )
 
     body, notes = _normalise_macro(macros[cell], cell, directions)
+    try:
+        body, band_notes = _rail_band_to_obs(body, cell)
+    except ExportError as exc:
+        _reject(out, f"cannot publish the rail band of {cell} as obstruction: {exc}")
+    notes += band_notes
+    try:
+        cuts = gds_cuts(gds_path, cell)
+        body, cut_notes = _add_cut_layers(body, cell, cuts)
+    except ExportError as exc:
+        _reject(out, f"cannot write the via cuts of {cell} into its LEF: {exc}")
+    notes += cut_notes
     if notes:
         text = out.read_text(errors="replace")
         text = text.replace(macros[cell], body, 1)
         header = "".join(f"# aion_layout: {note}\n" for note in notes)
         out.write_text(header + text)
+
+    # Every cut the GDS draws has to be in the LEF: one left out is a via the
+    # router cannot see, which is the defect writing them in exists to close.
+    written = {
+        layer: sum(1 for rect in metrics._layer_rects(metrics.lef_macros(out)[cell])
+                   if rect[0] == layer)
+        for layer in CUT_LAYERS
+    }
+    drawn = {layer: len(cuts.get(layer, ())) for layer in CUT_LAYERS}
+    if written != drawn:
+        _reject(
+            out,
+            f"the LEF of {cell} declares {written} cuts and the GDS draws {drawn}; "
+            "a cut missing from the LEF is a via the router lands on",
+        )
 
     try:
         lef_geometry = metrics.lef_macro_geometry(out, cell)
@@ -486,10 +821,13 @@ def export_lef(
 def check_lef(lef: Path | str, cell: Optional[str] = None) -> LefCheck:
     """Apply the gate ``make pnr`` applies, and report every failure it finds.
 
-    The six requirements come from ``output_constr.md``.  The two dimensional
-    ones are delegated to :func:`metrics.lef_macro_geometry` and pin access to
-    :func:`metrics.lef_pin_access`, so that the row height, the site pitch and
-    the via rules live in exactly one place in this package.
+    The nine requirements come from ``output_constr.md``.  The two dimensional
+    ones are delegated to :func:`metrics.lef_macro_geometry`, pin access to
+    :func:`metrics.lef_pin_access`, the rail-band and side-edge clearances to
+    :func:`metrics.lef_abutment_problems` and the two ways up out of every pin
+    to :func:`metrics.lef_pin_escape_problems`, so that the row height, the site
+    pitch, the via rules and the clearances live in exactly one place in this
+    package.
     """
     path = Path(lef)
     _readable(path, "LEF")
@@ -541,6 +879,16 @@ def check_lef(lef: Path | str, cell: Optional[str] = None) -> LefCheck:
     # abort in pin access, not a DRC checker LENIENT=1 can downgrade.  So it is
     # graded here, with the rest of the abstract.
     problems.extend(metrics.lef_pin_access(path, geometry.cell).problems)
+
+    # Metal the PDN's rail vias or the abutted neighbour will land on is clean
+    # in the cell and fails DRC and LVS in the placed design, so it is graded
+    # here too, where the drawing loop still sees it.
+    problems.extend(metrics.lef_abutment_problems(path, geometry.cell))
+
+    # A pin boxed in by other nets' metal with one Via2 track out is reachable
+    # and clean everywhere, and stalls detailed routing at hundreds of shorts
+    # for as long as it is left to run.
+    problems.extend(metrics.lef_pin_escape_problems(path, geometry.cell))
 
     return LefCheck(
         ok=not problems,
@@ -1013,6 +1361,14 @@ def _publish_libs(libs: Sequence[Path], cell: str, out_dir: Path) -> Tuple[Path,
     keep the names the characterizer gave them.  Discovery then groups them by
     the directory rather than the stem, which ``output_constr.md`` allows.
     """
+    # A publish over a different corner set left its Liberty here: <cell>.lib
+    # from a single corner, or <cell>_<corner>.lib from all of them.  Beside
+    # this run's files either one is a second timing model of the same cell,
+    # which `make pnr` refuses, so it is removed the way export_lef removes an
+    # earlier LEF before writing its own.
+    writing = {f"{cell}.lib"} if len(libs) == 1 else {lib.name for lib in libs}
+    for name in sorted(_lib_names(cell) - writing):
+        (out_dir / name).unlink(missing_ok=True)
     if len(libs) == 1:
         return (_copy_view(libs[0], out_dir / f"{cell}.lib", "Liberty library"),)
     published: List[Path] = []
@@ -1051,13 +1407,18 @@ def _quarantine_stale_views(out_dir: Path, cell: str, libs: Sequence[Path]) -> L
     return moved
 
 
+def _lib_names(cell: str) -> set:
+    """Every Liberty file name a publish of ``cell`` can write: one, or one per corner."""
+    return {f"{cell}.lib"} | {f"{cell}_{corner.tag}.lib" for corner in DEFAULT_CORNERS}
+
+
 def _view_names(cell: str, libs: Sequence[Path]) -> Tuple[str, ...]:
     """The view filenames :func:`export_all` writes for ``cell``, sorted.
 
     The LEF is not among them: it is written and graded before the others, and
     :func:`_reject` quarantines it on its own.
     """
-    names = {f"{cell}.{ext}" for ext in ("gds", "v", "spice", "cdl", "lib")}
+    names = {f"{cell}.{ext}" for ext in ("gds", "v", "spice", "cdl")} | _lib_names(cell)
     names.update(lib.name for lib in libs)
     return tuple(sorted(names))
 

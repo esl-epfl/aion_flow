@@ -502,6 +502,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return _verdict_exit(graded.result)
 
 
+def cmd_pin_access(args: argparse.Namespace) -> int:
+    """Run TritonRoute's pin access on a LEF and print ``STEP: pin_access OK|FAIL``."""
+    lef = _need_file(args.lef, "LEF")
+    work_dir = _make_dir(args.work_dir)
+    pin_access = _load("pin_access")
+
+    report = pin_access.run_pin_access(lef, args.cell, work_dir)
+    say(f"cell: {args.cell}")
+    say(f"lef:  {lef}")
+    if report.log is not None:
+        say(f"log:  {report.log}")
+    if report.result == pin_access.RESULT_ERROR:
+        return _error_verdict(list(report.problems))
+    for pin, points in report.access_points.items():
+        say(f"PIN {pin}: " + ", ".join(f"({x:.3f}, {y:.3f}) on {layer}" for x, y, layer in points))
+    for problem in report.problems:
+        say(f"problem: {problem}")
+    return _step_verdict("pin_access", report.ok)
+
+
 def cmd_pex(args: argparse.Namespace) -> int:
     """Extract a parasitic netlist from a GDS with Magic."""
     gds = _need_file(args.gds, "GDS")
@@ -905,7 +925,10 @@ def cmd_export(args: argparse.Namespace) -> int:
         lib_files=libs,
         out_dir=out_dir,
         pex_spice=pex_spice,
-        directions=_directions_from_spice(spice, args.cell),
+        # The same directions `flow` publishes with: the generator's sidecar,
+        # and the netlist guess only without one.  The guess knows one output,
+        # so on its own it published O1 of every two-output cell as an input.
+        directions=_flow_directions(_load("steps"), gds, spice, args.cell),
     )
     return _step_verdict("export", _print_views(views))
 
@@ -1359,6 +1382,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--report", help="also write the verdict report to this file")
     p.set_defaults(handler=cmd_verify)
+
+    # -- pin-access --------------------------------------------------------
+    p = subparsers.add_parser(
+        "pin-access",
+        help="run TritonRoute's pin access on a cell's LEF",
+        description=(
+            "Place the cell in an N and an FS row between PDK cells and run "
+            "OpenROAD pin_access, the stage that aborts detailed routing with "
+            "DRT-0073. Ends in one STEP: pin_access OK|FAIL line."
+        ),
+    )
+    p.add_argument("lef", help="the cell's LEF")
+    p.add_argument("--cell", required=True, help="macro to check")
+    p.add_argument("-w", "--work-dir", required=True, help="directory for the design and log")
+    p.set_defaults(handler=cmd_pin_access)
 
     # -- pex ---------------------------------------------------------------
     p = subparsers.add_parser(

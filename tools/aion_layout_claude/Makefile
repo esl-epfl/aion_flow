@@ -41,6 +41,7 @@ FINAL_DIR     ?= $(BUILD_DIR)/final
 BASELINE_DIR  ?= $(BUILD_DIR)/baseline
 CHAR_DIR      ?= $(BUILD_DIR)/char
 GDS           ?= $(BUILD_DIR)/$(CELL).gds
+LEF           ?= $(FINAL_DIR)/$(CELL).lef
 PNG           ?= $(BUILD_DIR)/$(CELL).png
 PEX_DIR       ?= $(BUILD_DIR)/pex
 
@@ -116,7 +117,7 @@ BASELINE_GDS   ?= $(BASELINE_DIR)/$(BASELINE_CELL).gds
 export PYTHONPATH := $(CURDIR)$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 .DEFAULT_GOAL := help
-.PHONY: help scaffold gds png drc lvs verify pex evidence baseline \
+.PHONY: help scaffold gds png drc lvs verify pin-access pex evidence baseline \
         characterize compare export flow test clean
 
 help: ## Show this help and the current variable values
@@ -157,9 +158,12 @@ drc: gds ## Run Magic + KLayout DRC on the GDS
 lvs: gds ## Run Magic + Netgen LVS of the GDS against NETLIST
 	$(AION) lvs $(GDS) $(NETLIST) --cell $(CELL) -w $(BUILD_DIR)/lvs
 
-verify: ## Build + DRC + LVS and print RESULT: PASS|FAIL|ERROR
+verify: ## Build + DRC + LVS + abstract + TritonRoute pin access; RESULT: PASS|FAIL|ERROR
 	$(AION) verify $(CELL_MODULE) --cell $(CELL) --netlist $(NETLIST) \
 		-w $(BUILD_DIR) --report $(BUILD_DIR)/$(CELL).report.md
+
+pin-access: ## TritonRoute pin access on LEF (default: the exported one); STEP: pin_access OK|FAIL
+	$(AION) pin-access $(LEF) --cell $(CELL) -w $(BUILD_DIR)/pin_access_final
 
 pex: gds ## Extract parasitics from the GDS into PEX_DIR
 	$(AION) pex $(GDS) --cell $(CELL) -w $(PEX_DIR) --mode $(PEX_MODE)

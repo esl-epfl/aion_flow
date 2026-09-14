@@ -20,7 +20,7 @@ REPO_ROOT := $(realpath .)
         aion-char-clean aion-char-clean-tb aion-char-clean-lib \
         aion-char-clean-build \
         aion-layout-resize aion-layout-scaffold aion-layout-gds aion-layout-png aion-layout-drc \
-        aion-layout-lvs aion-layout-verify aion-layout-pex aion-layout-evidence \
+        aion-layout-lvs aion-layout-verify aion-layout-pin-access aion-layout-pex aion-layout-evidence \
         aion-layout-baseline aion-layout-characterize aion-layout-compare \
         aion-layout-export aion-layout-flow aion-layout-test aion-layout-clean \
         split-spice-cells merge-spice-cells run-aion-minimizer-batch \
@@ -409,6 +409,9 @@ aion-layout-lvs: ## Run Magic + Netgen LVS against the netlist
 
 aion-layout-verify: ## Build + DRC + LVS, print one RESULT: line
 	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) verify $(AION_LAYOUT_VARS)
+
+aion-layout-pin-access: ## TritonRoute pin access on the exported LEF, print one STEP: line
+	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) pin-access $(AION_LAYOUT_VARS)
 
 aion-layout-pex: ## Extract the full-RC parasitic netlist with Magic
 	$(MAKE) --no-print-directory -C $(AION_LAYOUT_DIR) pex $(AION_LAYOUT_VARS)

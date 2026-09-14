@@ -34,9 +34,11 @@ from aion_layout.metrics import (
     drawn_shapes,
     gds_boundary,
     layer_inventory,
+    lef_abutment_problems,
     lef_macro_geometry,
     lef_macros,
     lef_pin_access,
+    lef_pin_escape_problems,
     pdk_lef_geometry,
     routing_metals_used,
     tap_contact_problems,
@@ -633,6 +635,284 @@ def test_a_tap_of_the_wrong_size_is_caught():
     assert tap_contact_problems(wide), (
         "a 240 nm cut at x = 160 still overhangs the neighbour's 160..320"
     )
+
+
+# ---------------------------------------------------------------------------
+# Abutment: the PDN's rail vias and the neighbour beside the cell
+# ---------------------------------------------------------------------------
+
+_RAILS = (
+    ("VDD", "POWER", ("LAYER Metal1 ;", f"RECT 0.000 3.560 {KNOWN_WIDTH_UM} 4.000 ;")),
+    ("VSS", "GROUND", ("LAYER Metal1 ;", f"RECT 0.000 -0.220 {KNOWN_WIDTH_UM} 0.220 ;")),
+)
+
+
+def test_metal2_under_the_pdn_rail_pad_is_caught(tmp_path):
+    """The bar seven AION cells drew at y = 0.11 um, and where it has to go.
+
+    The PDN's via stack puts a 0.29 um Metal2 pad on the rail line wherever a
+    strap crosses the row.  At 0.11 um the bar overlaps it: step 7 shorted 130
+    nets to VGND that way, with every cell DRC- and LVS-clean on its own.
+    """
+    bar = ("LAYER Metal2 ;", "RECT 0.570 0.110 2.315 0.310 ;")
+    bad = lef_abutment_problems(_write(tmp_path, _pin_lef(("I0", "SIGNAL", bar), *_RAILS)))
+
+    assert len(bad) == 1 and "Metal2 within 0.355 um of a rail line" in bad[0], bad
+    assert "PIN I0 RECT 0.570 0.110 2.315 0.310" in bad[0], f"name the shape: {bad[0]}"
+    assert "y = 0.355 .. 3.425" in bad[0], f"and where it may go: {bad[0]}"
+
+    clear = ("LAYER Metal2 ;", "RECT 0.570 0.355 2.315 0.555 ;")
+    assert lef_abutment_problems(
+        _write(tmp_path, _pin_lef(("I0", "SIGNAL", clear), *_RAILS))
+    ) == (), "exactly the pad's half-height plus M2.b is legal"
+
+    top = ("LAYER Metal2 ;", "RECT 0.570 3.300 2.315 3.500 ;")
+    assert lef_abutment_problems(
+        _write(tmp_path, _pin_lef(obs=top))
+    ), "the VDD rail gets the same via stack, and OBS is metal like any other"
+
+
+def test_metal1_at_the_side_edge_is_caught(tmp_path):
+    """AION_xnor2_xor2_7/O1 ran to x = 7.670 in a 7.680 um cell: 50 M1.b errors.
+
+    Each cell may take half of the 0.18 um spacing, because the neighbour it
+    abuts is held to the other half.  The rails run edge to edge on purpose.
+    """
+    width = KNOWN_WIDTH_UM
+    near = ("LAYER Metal1 ;", f"RECT {width - 0.170:.3f} 1.250 {width - 0.010:.3f} 2.310 ;")
+    bad = lef_abutment_problems(_write(tmp_path, _pin_lef(("O1", "SIGNAL", near), *_RAILS)))
+
+    assert len(bad) == 1 and "Metal1 within 0.090 um of the left or right" in bad[0], bad
+    assert f"x = 0.090 .. {width - 0.090:.3f}" in bad[0], bad[0]
+
+    half = ("LAYER Metal1 ;", f"RECT 0.090 1.250 0.250 2.310 ;")
+    assert lef_abutment_problems(
+        _write(tmp_path, _pin_lef(("O1", "SIGNAL", half), *_RAILS))
+    ) == (), "the rails are exempt, and half the spacing is enough"
+
+    stub = ("LAYER Metal1 ;", "RECT 0.000 0.220 0.260 0.880 ;")
+    assert lef_abutment_problems(
+        _write(tmp_path, _pin_lef(("VSS", "GROUND", stub)))
+    ), "only the rail band is exempt; a supply stub at the edge still meets a signal"
+
+
+# ---------------------------------------------------------------------------
+# Pin escape: two ways up out of every pin
+# ---------------------------------------------------------------------------
+
+#: AION_xor2_5 as published on 2026-09-13, Metal1 and Metal2 only: the cell whose
+#: I0 and I2 stalled step 7's detailed routing.  Each sits in a box of the pin
+#: beside it (a U of Metal2, bar at y = 0.36) and an obstruction bar at y = 1.97.
+_XOR2_5 = """\
+MACRO AION_xor2_5
+  CLASS CORE ;
+  SIZE 7.680 BY 3.780 ;
+  SITE CoreSite ;
+  PIN I0
+    PORT
+      LAYER Metal1 ;
+        RECT 0.935 1.450 1.565 1.790 ;
+        RECT 2.065 1.450 2.365 1.790 ;
+      LAYER Metal2 ;
+        RECT 1.315 1.545 2.365 1.745 ;
+    END
+  END I0
+  PIN I1
+    PORT
+      LAYER Metal1 ;
+        RECT 0.100 1.450 0.755 1.790 ;
+        RECT 2.575 1.450 2.875 1.790 ;
+      LAYER Metal2 ;
+        RECT 0.150 0.560 0.350 1.760 ;
+        RECT 2.630 0.560 2.830 1.760 ;
+        RECT 0.150 0.360 2.830 0.560 ;
+    END
+  END I1
+  PIN O0
+    PORT
+      LAYER Metal1 ;
+        RECT 3.340 2.310 3.760 2.910 ;
+        RECT 3.600 1.790 3.760 2.310 ;
+        RECT 3.600 1.450 4.585 1.790 ;
+        RECT 6.405 1.450 6.705 1.790 ;
+        RECT 3.600 1.250 3.760 1.450 ;
+        RECT 2.850 1.090 3.760 1.250 ;
+        RECT 2.850 0.620 3.110 1.090 ;
+      LAYER Metal2 ;
+        RECT 3.980 0.560 4.180 1.760 ;
+        RECT 6.460 0.560 6.660 1.760 ;
+        RECT 3.980 0.360 6.660 0.560 ;
+    END
+  END O0
+  PIN I2
+    PORT
+      LAYER Metal1 ;
+        RECT 4.765 1.450 5.395 1.790 ;
+        RECT 5.895 1.450 6.195 1.790 ;
+      LAYER Metal2 ;
+        RECT 5.145 1.545 6.195 1.745 ;
+    END
+  END I2
+  PIN O1
+    PORT
+      LAYER Metal1 ;
+        RECT 7.170 2.310 7.590 2.910 ;
+        RECT 7.430 1.250 7.590 2.310 ;
+        RECT 6.680 1.090 7.590 1.250 ;
+        RECT 6.680 0.620 6.940 1.090 ;
+    END
+  END O1
+  PIN VDD
+    USE POWER ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.000 3.560 7.680 4.000 ;
+        RECT 1.240 2.310 1.500 3.560 ;
+        RECT 2.340 2.310 2.600 3.560 ;
+        RECT 5.070 2.310 5.330 3.560 ;
+        RECT 6.170 2.310 6.430 3.560 ;
+    END
+  END VDD
+  PIN VSS
+    USE GROUND ;
+    PORT
+      LAYER Metal1 ;
+        RECT 0.220 0.220 0.480 0.880 ;
+        RECT 1.240 0.220 1.500 0.880 ;
+        RECT 1.830 0.220 2.090 0.880 ;
+        RECT 3.360 0.220 3.620 0.880 ;
+        RECT 4.050 0.220 4.310 0.880 ;
+        RECT 5.070 0.220 5.330 0.880 ;
+        RECT 5.660 0.220 5.920 0.880 ;
+        RECT 7.190 0.220 7.450 0.880 ;
+        RECT 0.000 -0.220 7.680 0.220 ;
+    END
+  END VSS
+  OBS
+      LAYER Metal1 ;
+        RECT 0.200 2.310 0.500 2.910 ;
+        RECT 1.830 2.130 2.090 2.910 ;
+        RECT 2.850 2.130 3.110 2.910 ;
+        RECT 4.030 2.310 4.330 2.910 ;
+        RECT 1.830 1.970 3.110 2.130 ;
+        RECT 5.660 2.130 5.920 2.910 ;
+        RECT 6.680 2.130 6.940 2.910 ;
+        RECT 5.660 1.970 6.940 2.130 ;
+        RECT 3.085 1.450 3.385 1.790 ;
+        RECT 6.915 1.450 7.215 1.790 ;
+        RECT 0.710 0.590 1.010 1.250 ;
+        RECT 4.540 0.590 4.840 1.250 ;
+      LAYER Metal2 ;
+        RECT 0.250 2.170 0.450 2.760 ;
+        RECT 4.080 2.170 4.280 2.760 ;
+        RECT 0.200 1.970 3.335 2.170 ;
+        RECT 4.030 1.970 7.165 2.170 ;
+        RECT 0.760 0.955 0.960 1.970 ;
+        RECT 3.135 1.450 3.335 1.970 ;
+        RECT 4.590 0.955 4.790 1.970 ;
+        RECT 6.965 1.450 7.165 1.970 ;
+  END
+END AION_xor2_5
+"""
+
+
+def _edited(text, *moves):
+    """``text`` with each ``(old, new)`` RECT coordinate string swapped exactly once."""
+    for old, new in moves:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
+def test_a_pin_boxed_in_with_one_via2_track_is_caught(tmp_path):
+    """AION_xor2_5/I0 and I2: reachable, clean, and the stall of step 7's router.
+
+    Detailed routing sat at ~415 violations for 60+ iterations at every die
+    size, 433 of the 498 markers at iteration 10 on this master and two like it.
+    The reason has to name the two bars that close the second track, not the
+    riser that only clips one end of it.
+    """
+    lef = _write(tmp_path, _XOR2_5)
+    problems = lef_pin_escape_problems(lef)
+
+    assert [problem.split()[1] for problem in problems] == ["I0", "I2"], problems
+    assert lef_pin_access(lef).ok and lef_abutment_problems(lef) == (), (
+        "no other rule sees it, which is why this one exists"
+    )
+    assert "on 1 Metal3 track (y = 1.260 um)" in problems[0], problems[0]
+    assert "y = 0.840 by Metal2 of PIN I1 (RECT 0.150 0.360 2.830 0.560)" in problems[0], problems[0]
+    assert "y = 1.680 by Metal2 of OBS (RECT 0.200 1.970 3.335 2.170)" in problems[0], problems[0]
+
+
+def test_the_same_box_with_a_second_track_passes(tmp_path):
+    """Two tracks routed clean: the abstracts before the bar left the rail band.
+
+    Swapped onto the same placement, the U bars at y = 0.11 um let a Via2 sit on
+    y = 0.84 as well, and detailed routing reached 0 violations by iteration 8.
+    Those bars now fail the rail rule; lifting the obstruction bar 25 nm opens
+    y = 1.68 instead and passes both.
+    """
+    old = _edited(
+        _XOR2_5,
+        ("0.150 0.360 2.830 0.560", "0.150 0.110 2.830 0.310"),
+        ("0.150 0.560 0.350 1.760", "0.150 0.310 0.350 1.760"),
+        ("2.630 0.560 2.830 1.760", "2.630 0.310 2.830 1.760"),
+        ("3.980 0.360 6.660 0.560", "3.980 0.110 6.660 0.310"),
+        ("3.980 0.560 4.180 1.760", "3.980 0.310 4.180 1.760"),
+        ("6.460 0.560 6.660 1.760", "6.460 0.310 6.660 1.760"),
+    )
+    assert lef_pin_escape_problems(_write(tmp_path, old)) == ()
+
+    lifted = _write(tmp_path, _edited(
+        _XOR2_5,
+        ("0.200 1.970 3.335 2.170", "0.200 1.995 3.335 2.195"),
+        ("4.030 1.970 7.165 2.170", "4.030 1.995 7.165 2.195"),
+    ))
+    assert lef_pin_escape_problems(lifted) == ()
+    assert lef_abutment_problems(lifted) == ()
+
+
+def _ringed_pin(gap_lo, gap_hi):
+    """A Metal1 pin under another net's Metal2 plate, in a Metal1 ring open on the left.
+
+    No Via1 fits anywhere the plate covers, so the only way up is along Metal1,
+    through the ring's opening from ``y = gap_lo`` to ``gap_hi``, to free space.
+    """
+    return _pin_lef(
+        ("I0", "SIGNAL", ("LAYER Metal1 ;", "RECT 1.200 1.600 1.500 1.800 ;")),
+        obs=(
+            "LAYER Metal1 ;",
+            "RECT 0.400 2.100 2.400 2.260 ;",
+            "RECT 0.400 1.140 2.400 1.300 ;",
+            "RECT 2.240 1.140 2.400 2.260 ;",
+            f"RECT 0.400 1.140 0.560 {gap_lo:.3f} ;",
+            f"RECT 0.400 {gap_hi:.3f} 0.560 2.260 ;",
+            "LAYER Metal2 ;",
+            "RECT 0.700 1.100 2.000 2.300 ;",
+        ),
+    )
+
+
+def test_planar_metal1_is_a_way_out(tmp_path):
+    """TritonRoute leaves a crowded pin on Metal1 and goes up where there is room.
+
+    Counting only a Via1 over the pin's own Metal1 leaves 33 PDK pins and
+    AION_mux2_0's I0, I1 and I3 short of two tracks, and they all route.
+    """
+    assert lef_pin_escape_problems(_write(tmp_path, _ringed_pin(1.300, 2.100))) == ()
+
+
+def test_a_gap_exactly_one_wire_wide_is_not_a_way_out(tmp_path):
+    """0.18 + 0.16 + 0.18 = 0.52 um holds a Metal1 wire only at exactly minimum spacing.
+
+    AION_xor2_5/I0 has such a slot, between I1's Metal1 and an obstruction:
+    followed, it hid the box.  5 nm more and it is a route.
+    """
+    closed = lef_pin_escape_problems(_write(tmp_path, _ringed_pin(1.440, 1.960)))
+    assert len(closed) == 1 and "on 0 Metal3 tracks" in closed[0], closed
+    assert "no Via1 from the Metal1 its wire can reach" in closed[0], closed[0]
+
+    assert lef_pin_escape_problems(_write(tmp_path, _ringed_pin(1.435, 1.965))) == ()
 
 
 def test_drawn_shapes_reads_the_layers_the_abutment_rules_need(known_gds):

@@ -54,6 +54,7 @@ from .metrics import (
     gds_boundary,
     tap_contact_problems,
 )
+from .pin_access import RESULT_ERROR as PIN_ACCESS_ERROR, run_pin_access
 from .runner import (
     TOOL_DIR,
     rel_to_tool,
@@ -794,6 +795,10 @@ def _grade_lvs(report: Optional[LvsReport], errors: List[str],
 #: that name means "do not place this cell".
 ABSTRACT_DIR = "abstract"
 
+#: Where :func:`abstract_problems` runs TritonRoute's pin access, under the work
+#: directory.  Wiped by every run.
+PIN_ACCESS_DIR = "pin_access"
+
 
 def abstract_problems(
     gds: Path, cell_name: str, work: Path
@@ -812,6 +817,10 @@ def abstract_problems(
     wrote and :func:`export_lef` then refused (it leaves ``.lef.rejected``), or
     one with problems, is a FAIL: that is a statement about the cell.  The LEF
     is written without pin directions, which no check here reads.
+
+    The LEF is then handed to TritonRoute (:func:`pin_access.run_pin_access`):
+    a pin it finds no access point for is a FAIL, a run that could not be
+    graded an ERROR.
     """
     errors: List[str] = []
     failures: List[str] = []
@@ -838,6 +847,16 @@ def abstract_problems(
                       f"{_flatten(exc, 300)}")
         return errors, failures
     failures.extend(f"abstract (LEF): {problem}" for problem in check.problems)
+
+    # The static rules are necessary, not sufficient: TritonRoute only tries
+    # some via positions.  So the router itself is asked, on this same LEF, and
+    # step 6 asks again on the published one before it copies the cell.
+    access = run_pin_access(lef, cell_name, work / PIN_ACCESS_DIR)
+    if access.result == PIN_ACCESS_ERROR:
+        errors.extend(f"TritonRoute pin access could not grade {cell_name}: "
+                      f"{_flatten(problem, 400)}" for problem in access.problems)
+    else:
+        failures.extend(f"abstract (TritonRoute): {problem}" for problem in access.problems)
     return errors, failures
 
 
@@ -917,10 +936,11 @@ def verify(
 
     # What a cell does to its neighbours is DRC-clean, LVS-clean and row-legal
     # on its own, and then takes step 7 down an hour later -- DRT-0073 in pin
-    # access, or thousands of Cnt.b violations once the rails abut.  Neither is
-    # visible in a cell by itself, so both are graded here, inside the drawing
-    # loop where they can still be fixed: the rail taps from the drawn geometry,
-    # pin access from the abstract below.
+    # access, thousands of Cnt.b violations once the rails abut, nets shorted
+    # to VSS under the PDN's rail vias, M1.b against the cell next door.  None
+    # is visible in a cell by itself, so all are graded here, inside the
+    # drawing loop where they can still be fixed: the rail taps from the drawn
+    # geometry; pin access, the clearances and TritonRoute from the abstract.
     drawn = None
     try:
         drawn = drawn_shapes(gds, cell_name=cell_name)

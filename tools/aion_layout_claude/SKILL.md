@@ -20,7 +20,7 @@ and `PYTHONPATH=.` (the `Makefile` sets it for you).
 ```bash
 make scaffold CELL=<cell> NETLIST=<netlist.spice>   # once: a starting generator
 $EDITOR cells/<cell>.py                             # ← the only thing you do by hand
-make verify  CELL=<cell> NETLIST=<netlist.spice>    # build + DRC + LVS + pin access, one RESULT: line
+make verify  CELL=<cell> NETLIST=<netlist.spice>    # build + DRC + LVS + pin access + abutment + TritonRoute, one RESULT: line
 make evidence CELL=<cell> NETLIST=<netlist.spice>   # what to fix, with coordinates
 ```
 
@@ -262,6 +262,30 @@ Metal1 and its Metal2 pad 210 nm clear of other nets' Metal2**. Covering a track
 210 nm across are the way to get there without thinking about it, not the rule itself.
 All 283 signal pins of the PDK `sg13g2_stdcell` library pass.
 
+### Then TritonRoute has the last word
+
+That rule is necessary, not sufficient: it accepts any via position that is legal, and
+TritonRoute only tries some — tracks, half tracks, the pin centre, positions aligning the
+enclosure with the pin. So `make verify` also places the LEF in an `N` and an `FS` row
+between PDK cells and runs OpenROAD's `pin_access`, the stage that aborts step 7 with
+`DRT-0073`. A reason starting `abstract (TritonRoute): PIN X:` means the router itself found
+no way in, even if no static reason names the pin — give the via room where TritonRoute
+looks: widen the port across a track, and clear the metal beside it on its layer and the
+one above. Step 6 runs the same check again before it publishes the cell.
+
+The LEF the router reads now declares your `Via1` cuts too (magic writes none; the
+exporter adds them from the GDS). Before that, TritonRoute could not see a cell's own via
+and dropped its access via right beside it: `AION_xnor2_1/I0` came back from step 7 as a
+`V1.a` violation. With the cut declared it enters that pin on Metal2 instead — there is
+nothing to draw differently for this.
+
+The exporter also publishes any part of a signal pin's Metal2 within 565 nm of a rail
+line as `OBS`, because the power grid's rail via pads sit there and the router must not
+land beside them. You draw nothing differently for this either, but the checks read `OBS`
+as another net. A reason naming an `OBS` Metal2 rectangle at `y < 565` (or `> 3215`) nm
+may be your own pin's bar: then give that pin its access and its two ways up above the
+band.
+
 ## Rail tap contacts go at `x = 160 + 480k`
 
 Rows are placed **mirrored and abutted**, so a cell's VSS rail is the same silicon as the
@@ -293,6 +317,69 @@ cell width — so moving the contacts onto the grid is self-contained.
 
 `make verify` checks this from the GDS. It is the same shape of problem as the two above:
 invisible in a cell on its own, fatal once it has neighbours.
+
+## Leave room for the power grid and the neighbour
+
+Two more things a placed cell meets that a cell on its own never does. Both were found in
+one step-7 run whose cells were all DRC-clean, LVS-clean and pin-access clean on their own.
+
+**Metal2 and above stay 355 nm clear of both rails.** Wherever a vertical power strap
+crosses a row — and it can cross anywhere along your cell — the PDN drops a via stack onto
+the VDD and VSS rails. Its pads are centred on the rail line: 290 nm tall on Metal2 and
+Metal4, 200 nm on Metal3, 620 nm on Metal5. So your metal has to keep the pad's half-height
+plus the layer's spacing from `y = 0` and from `y = 3780`:
+
+| layer | keep inside y (nm) |
+|---|---|
+| `Metal2`, `Metal4` | `355 … 3425` (145 + 210) |
+| `Metal3` | `310 … 3470` (100 + 210) |
+| `Metal5` | `520 … 3260` (310 + 210) |
+
+Seven AION cells drew a horizontal Metal2 bar at `y = 110 … 310` to join two gate risers.
+Where the bar overlapped the pad it **shorted the net to VSS: 130 nets in one chip**. Where
+it came close without touching it was 111 `M2.b` errors. `AION_mux2_0` put its Metal2 at
+`y = 200` and got the spacing errors only. Shift such a bar up so it starts at `y = 355` or
+higher; it now crosses more of the Metal1 below it, so let `make verify` re-grade pin access
+— and it now sits closer to whatever pin it wraps, so read the next section before you do.
+
+**Every metal keeps half its spacing from the left and right edges**: Metal1 90 nm, Metal2
+and up 105 nm, so `x = 90 … CELL_W − 90` on Metal1. The cell abutted beside yours only keeps
+the other half. `AION_xnor2_xor2_7` ran its `O1` output to `x = 7670` in a 7680 nm cell and
+got 50 `M1.b` errors against the PDK cells placed next to it. The VDD/VSS rails are the
+exception: they run edge to edge on purpose, to join the neighbour's. A supply *stub* is
+not exempt — `x = 90` applies to it too.
+
+`make verify` grades both on the LEF magic writes, as `make export` and `make pnr` do. All 84
+PDK `sg13g2_stdcell` cells pass both.
+
+## Give every pin two ways up
+
+A pin the router can *reach* can still be one it cannot get *out of*. Follow a wire of the
+pin's net from its port along free Metal1 and Metal2 — its centre `spacing + width/2` clear of
+every other net (Metal1 260 nm, Metal2 310 nm), through a `Via1` wherever both of its metal
+shapes clear the other nets — and count the Metal3 tracks `y = n * 420` nm on which a `Via2`
+fits: Metal2 enclosure 290 × 210 nm, 210 nm clear of other nets' Metal2. **Every signal pin
+needs at least two.**
+
+After the bars above were lifted to `y = 355`, `AION_xor2_5` (I0, I2), `AION_xor2_8` (I0) and
+`AION_xnor2_xor2_9` (I1) each had an inner pin in a box: below it the U-shaped Metal2 of the
+pin beside it, its bar now at `y = 360 … 560`; above it an obstruction bar at `y = 1970`. The
+bar's new height took the Via2 off `y = 840`, leaving `y = 1260` as the only way up.
+Detailed routing **stalled at ~400 Metal2 shorts for 60+ iterations, at every die size** — it
+kept shorting through the neighbour's bar. The same placement with the bars back at `y = 110`
+(two tracks) routed to zero. DRC, LVS and pin access are clean on every one of these cells.
+
+`make verify` reports it as `PIN X can put a Via2 on 1 Metal3 track …`, names the track the
+pin has and, for each track next to it, the shape that keeps the via off. To fix it, open a
+second track:
+
+- move that shape — in `AION_xor2_5`, lifting the obstruction bar from `y = 1970` to `1995`
+  opens `y = 1680` (`1680 + 105 + 210 = 1995`) and keeps the U bar out of the rail band; or
+- run the pin's own Metal2 out of the box, so its wire is not walled in at all.
+
+A slot exactly one wire wide (Metal1 `180 + 160 + 180 = 520` nm between two shapes) does not
+count as a way out. Pins drawn on Metal3 or above are not graded. All 283 signal pins of the
+PDK library reach eight tracks.
 
 ---
 
@@ -417,6 +504,16 @@ almost never the routing.
   line inside it, a Metal2 port an `x = n * 480` nm line. Miss it and detailed routing
   kills the whole design with `DRT-0073`, long after this cell looked finished.
   `make export` refuses to publish a cell that fails it.
+- **Leave the rail via band and the side edges free**: Metal2 inside `y = 355 … 3425` nm
+  (Metal3 `310 … 3470`, Metal5 `520 … 3260`), and every metal at least half its spacing
+  from the left and right edges — 90 nm on Metal1, 105 nm above — rails excepted. Miss it
+  and the placed design shorts nets to VSS under the power grid's vias or fails spacing
+  against its neighbours, while this cell verifies clean on its own. `make export` refuses
+  to publish a cell that fails it.
+- **Give every signal pin a Via2 on at least two Metal3 tracks**, reachable from the pin
+  along free Metal1 and Metal2. A pin boxed in by other nets' Metal2 with one track out
+  stalls detailed routing at hundreds of shorts, however long it runs. `make export` refuses
+  to publish a cell that fails it.
 - **The Verilog model is solved from the netlist, not written by you.** `make export`
   derives the cell's function from the transistor netlist, checks it against the
   `function` the characterizer measured in SPICE, and refuses to publish anything when

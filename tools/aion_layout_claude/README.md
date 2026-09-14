@@ -176,7 +176,8 @@ result by accident. Those are the three wildcards the guards above cover.
 | `png` | the same, plus `--png $(PNG)` | a rendering of it | `build/<cell>/<cell>.png` |
 | `drc` | `aion_layout drc $(GDS) -w $(BUILD_DIR)/drc --cell $(CELL)` | Magic and KLayout reports, and the KLayout receipt | `build/<cell>/drc/` |
 | `lvs` | `aion_layout lvs $(GDS) $(NETLIST) --cell $(CELL) -w $(BUILD_DIR)/lvs` | the Netgen report and the extracted netlist | `build/<cell>/lvs/` |
-| `verify` | `aion_layout verify $(CELL_MODULE) --cell $(CELL) --netlist $(NETLIST) -w $(BUILD_DIR) --report ...` | `RESULT: PASS\|FAIL\|ERROR`, plus everything `drc` and `lvs` produce | stdout and `build/<cell>/<cell>.report.md` |
+| `verify` | `aion_layout verify $(CELL_MODULE) --cell $(CELL) --netlist $(NETLIST) -w $(BUILD_DIR) --report ...` | `RESULT: PASS\|FAIL\|ERROR`, plus everything `drc` and `lvs` produce, the abstract (LEF) checks and TritonRoute pin access on it | stdout and `build/<cell>/<cell>.report.md` |
+| `pin-access` | `aion_layout pin-access $(LEF) --cell $(CELL) -w $(BUILD_DIR)/pin_access_final` | `STEP: pin_access OK\|FAIL`: OpenROAD `pin_access` on the cell placed in an N and an FS row, and where it enters each pin | stdout and `build/<cell>/pin_access_final/` |
 | `evidence` | `aion_layout evidence --cell $(CELL) --netlist $(NETLIST) --gds $(GDS) --module $(CELL_MODULE) -o ...` | the packet the model reads between edits | `build/<cell>/<cell>.evidence.md` |
 | `pex` | `aion_layout pex $(GDS) --cell $(CELL) -w $(PEX_DIR) --mode $(PEX_MODE)` | the extracted netlist (Magic; mode 3 = R+C by default) | `build/<cell>/pex/<cell>_pex<mode>.spice` |
 | `baseline` | `aion_layout baseline $(BASELINE) -o $(BASELINE_DIR) --verify --pex --characterize` | the abutted PDK row, verified, extracted and characterized | `build/<cell>/baseline/` |
@@ -458,6 +459,22 @@ Magic's output to find out what changed:
 #   without one the placer has no row to legalise the cell into
 ```
 
+Magic also writes no cut layers, with or without `-pinonly`, so `export_lef`
+reads every `Via1`..`Via4` cut out of the GDS and writes it in: into a pin's
+`PORT` when that pin's port covers it on both metals, into `OBS` otherwise, the
+way the PDK's own LEF declares them. A router that cannot see a cut lands its
+own via beside it — step 7 did exactly that on two AION cells, and the merged
+cuts came back as `V1.a` — and a LEF that ends up declaring a different number
+of cuts than the GDS draws is refused.
+
+Before the cuts go in, `export_lef` splits every signal pin's `Metal2` rectangle
+0.565 um from each rail line and writes the part inside that band to `OBS`
+(`_rail_band_to_obs`). The metal does not move. Under a power strap the PDN's
+rail via pad sits right there, and a router wire or `Via2` landing on pin metal
+that low, on the Metal3 track at y = 0.42 um, comes within spacing of it. In
+step 7 that was all 14 violations detailed routing never cleared. With the band
+published as obstruction, the same placement routed to 0.
+
 `export_lef` also cross-checks the `SIZE` line Magic wrote against the
 prBoundary in the GDS and rejects the LEF if they disagree, because a published
 LEF that describes a different cell from the GDS beside it is worse than no LEF
@@ -584,6 +601,7 @@ tools/aion_layout_claude/
 │   ├── logic.py                    # what the netlist computes: switch-level truth
 │   │                               #   table, minimised expression, .lib functions
 │   ├── exporters.py                # the six views, and the LEF checks
+│   ├── pin_access.py               # TritonRoute's pin access on the LEF, in a small placed design
 │   ├── compare.py                  # candidate vs baseline, and the COMPARE: line
 │   ├── evidence.py                 # the packet the model reads between edits
 │   ├── router.py                   # manual routing helpers

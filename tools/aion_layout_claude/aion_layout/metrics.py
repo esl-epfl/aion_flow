@@ -24,6 +24,7 @@ cell look larger the better it abuts.
 
 from __future__ import annotations
 
+import bisect
 import dataclasses as dc
 import math
 import re
@@ -116,6 +117,36 @@ TAP_CONT_SIZE_NM = 160.0
 #: Half-height of a VDD/VSS rail, in nm: it spans -220 .. 220 about the row
 #: line.  Geometry reaching into that band is shared with the abutting row.
 RAIL_HALF_NM = 220.0
+
+#: Half the height, in um, of the pad each metal gets in the via stack the PDN
+#: drops onto both rails wherever a ``TopMetal1`` strap crosses a row -- which
+#: can be anywhere along a cell.  The pads are centred on the row line.
+#: Measured from step 7's placed GDS (``VIA_via1_2_2200_440_1_5_410_410`` up to
+#: ``VIA_via5_6_2200_440_1_2_840_840``): 1.84 x 0.29 um on Metal2 and Metal4,
+#: 1.93 x 0.20 um on Metal3, 1.46 x 0.62 um on Metal5.  They follow from the
+#: 0.44 um rail and the via enclosure rules, not from the cell, so a cell has
+#: to leave them room: see :func:`lef_abutment_problems`.
+PDN_RAIL_PAD_HALF_UM = {
+    "Metal2": 0.145,
+    "Metal3": 0.100,
+    "Metal4": 0.145,
+    "Metal5": 0.310,
+}
+
+#: ``WIDTH`` of each routing metal in ``sg13g2_tech.lef``: the narrowest wire the
+#: router draws, so the narrowest gap between other nets' metal it can pass.
+METAL_WIDTH_UM = {
+    "Metal1": 0.16,
+    "Metal2": 0.20,
+    "Metal3": 0.20,
+    "Metal4": 0.20,
+    "Metal5": 0.20,
+}
+
+#: The fewest ``Metal3`` tracks a signal pin has to be able to put a ``Via2`` on.
+#: One stalled detailed routing in step 7 and two routed clean: see
+#: :func:`lef_pin_escape_problems`.
+PIN_ESCAPE_TRACKS_MIN = 2
 
 
 class MetricsError(RuntimeError):
@@ -670,6 +701,502 @@ def lef_pin_access(
     return PinAccess(cell=macro, reachable=reachable, problems=tuple(problems))
 
 
+def _shown_rects(offenders, clearance) -> str:
+    """Up to three offending ``(owner, x1, y1, x2, y2)`` shapes, as LEF lines.
+
+    Nearest first, by ``clearance(x1, y1, x2, y2)``: a strap running into the
+    band is listed after the bar that sits in it, which is the one to move.
+    """
+    offenders = sorted(offenders, key=lambda shape: clearance(*shape[1:]))
+    shown = ", ".join(
+        f"{owner} RECT {x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f}"
+        for owner, x1, y1, x2, y2 in offenders[:3]
+    )
+    more = f" and {len(offenders) - 3} more" if len(offenders) > 3 else ""
+    return shown + more
+
+
+def lef_abutment_problems(
+    lef_path: Path | str,
+    macro: Optional[str] = None,
+) -> Tuple[str, ...]:
+    """Grade the metal a placed cell shares with its neighbours and the PDN.
+
+    Two rules, both invisible in a cell on its own -- DRC-clean, LVS-clean, pin
+    access clean -- and both measured in step 7 on cells that were:
+
+    * **Metal2..Metal5 stay clear of the rail lines.**  The PDN drops a via
+      stack onto both rails wherever a strap crosses a row, and its pads reach
+      :data:`PDN_RAIL_PAD_HALF_UM` either side of the line.  A cell's metal must
+      keep that plus the layer's spacing from y = 0 and from the top edge.
+      Seven AION cells drew Metal2 at y = 0.11 um: 130 nets shorted to VGND
+      and 111 ``M2.b`` / 4 ``M2.a`` errors.
+    * **Every routing metal keeps half its spacing from the left and right
+      edges**, because the neighbour abutted there is held to only the other
+      half.  ``AION_xnor2_xor2_7`` drew Metal1 10 nm from its right edge: 50
+      ``M1.b`` errors against the PDK cells beside it.  The VDD/VSS rails are
+      exempt -- they are meant to join the neighbour's.
+
+    Graded on every net, pins and OBS alike.  All 84 PDK ``sg13g2_stdcell``
+    cells pass both.  ``collect_cells.check_abutment`` in aion_chip applies the
+    same rules at publish and before PnR; the two must stay in step.
+    """
+    path = Path(lef_path)
+    macros = lef_macros(path)
+    if not macros:
+        raise MetricsError(f"{path.name} defines no MACRO")
+    if macro is None:
+        if len(macros) != 1:
+            names = ", ".join(sorted(macros))
+            raise MetricsError(
+                f"{path.name} defines {len(macros)} macros ({names}); "
+                "name the one to check"
+            )
+        macro = next(iter(macros))
+    if macro not in macros:
+        raise MetricsError(
+            f"{path.name} defines no MACRO {macro!r}; it has: "
+            + ", ".join(sorted(macros))
+        )
+    body = macros[macro]
+    size = _LEF_SIZE_RE.search(body)
+    if size is None:
+        raise MetricsError(f"MACRO {macro} in {path.name} carries no SIZE line")
+    width, height = float(size.group(1)), float(size.group(2))
+
+    shapes: List[Tuple[str, bool, Tuple[str, float, float, float, float]]] = []
+    for name, pin_body in _LEF_PIN_RE.findall(body):
+        use = _LEF_USE_RE.search(pin_body)
+        power = (
+            use.group(1).upper() in ("POWER", "GROUND")
+            if use is not None
+            else name.upper() in POWER_PIN_NAMES
+        )
+        shapes.extend((f"PIN {name}", power, rect) for rect in _layer_rects(pin_body))
+    obs_block = _LEF_OBS_RE.search(body)
+    if obs_block is not None:
+        shapes.extend(("OBS", False, rect) for rect in _layer_rects(obs_block.group(1)))
+
+    rail_half = RAIL_HALF_NM / 1000.0
+    problems: List[str] = []
+    for layer in ROUTING_AXIS:
+        rects = [(owner, power, rect) for owner, power, rect in shapes if rect[0] == layer]
+
+        keep = PDN_RAIL_PAD_HALF_UM.get(layer)
+        if keep is not None:
+            keep += METAL_SPACING_UM[layer]
+            near = [
+                (owner, x1, y1, x2, y2)
+                for owner, _, (_, x1, y1, x2, y2) in rects
+                if y1 < keep - GRID_TOL_UM or y2 > height - keep + GRID_TOL_UM
+            ]
+            if near:
+                problems.append(
+                    f"{layer} within {keep:.3f} um of a rail line: "
+                    f"{_shown_rects(near, lambda x1, y1, x2, y2: min(y1, height - y2))}. Keep {layer} inside y = {keep:.3f} .. "
+                    f"{height - keep:.3f}. In PnR the power grid drops a via stack "
+                    f"onto both rails, anywhere along the cell, with a {layer} pad "
+                    f"reaching {PDN_RAIL_PAD_HALF_UM[layer]:.3f} um from the rail "
+                    f"line: nearer than {METAL_SPACING_UM[layer]} um to it is a "
+                    "spacing error, touching it shorts the net to VDD or VSS -- "
+                    "invisible in this cell alone"
+                )
+
+        half = METAL_SPACING_UM[layer] / 2.0
+        edge = [
+            (owner, x1, y1, x2, y2)
+            for owner, power, (_, x1, y1, x2, y2) in rects
+            if not (
+                power
+                and any(
+                    y1 >= line - rail_half - GRID_TOL_UM
+                    and y2 <= line + rail_half + GRID_TOL_UM
+                    for line in (0.0, height)
+                )
+            )
+            and (x1 < half - GRID_TOL_UM or x2 > width - half + GRID_TOL_UM)
+        ]
+        if edge:
+            problems.append(
+                f"{layer} within {half:.3f} um of the left or right cell edge: "
+                f"{_shown_rects(edge, lambda x1, y1, x2, y2: min(x1, width - x2))}. "
+                f"Keep {layer} inside x = {half:.3f} .. "
+                f"{width - half:.3f} -- half the {METAL_SPACING_UM[layer]} um "
+                "spacing, because the cell abutted on that side is held to only "
+                "the other half; nearer, the placed design has a spacing error "
+                "at every such abutment, invisible in this cell alone. The "
+                "VDD/VSS rails are exempt"
+            )
+    return tuple(problems)
+
+
+#: A macro shape in nm, as ``(owner, layer, x1, y1, x2, y2)``; ``owner`` is
+#: ``"PIN <name>"`` or ``"OBS"``, the way a problem names it.
+_Shape = Tuple[str, str, int, int, int, int]
+#: ``(x1, y1, x2, y2)`` in nm.
+_Box = Tuple[float, float, float, float]
+
+
+def _nm(um: float) -> int:
+    return round(um * 1000.0)
+
+
+def _grown(shapes: Iterable[_Shape], layer: str, half_x: float, half_y: float) -> List[_Box]:
+    """The ``layer`` shapes grown by ``half_x`` and ``half_y`` nm, read as open boxes.
+
+    Grown by the layer's spacing plus half of the wire or via that has to clear
+    them, other nets' shapes become the region that wire's or via's *centre*
+    may not enter.  The boundary itself is exactly minimum spacing, and free.
+    """
+    return [
+        (x1 - half_x, y1 - half_y, x2 + half_x, y2 + half_y)
+        for _, shape_layer, x1, y1, x2, y2 in shapes
+        if shape_layer == layer
+    ]
+
+
+def _free_spans(lo: float, hi: float, blocked: Iterable[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """``[lo, hi]`` minus the open ``blocked`` spans: the pieces of positive length."""
+    free: List[Tuple[float, float]] = []
+    at = lo
+    for start, end in sorted(blocked):
+        if min(start, hi) > at:
+            free.append((at, min(start, hi)))
+        at = max(at, end)
+        if at >= hi:
+            break
+    if at < hi:
+        free.append((at, hi))
+    return free
+
+
+class _FreeSpace:
+    """Where the centre of a wire may sit inside a cell, and which of it connects.
+
+    The cell is cut into horizontal bands at every edge of every box.  In a band
+    the free centres are a few x spans: the cell width minus the ``blocked``
+    boxes covering the band, plus the pin's ``own`` metal, which its wire may
+    always run along.  Spans of adjacent bands that overlap by a positive length
+    are one connected piece.  A gap exactly one wire wide between two other
+    nets' shapes is a span of length zero and connects nothing: a route that
+    has to hold minimum spacing on both sides at once is not a way out to count
+    on.
+    """
+
+    def __init__(self, width: int, height: int, blocked: List[_Box], own: Iterable[_Box] = ()):
+        own = list(own)
+        cuts = {0, height}
+        for box in blocked + own:
+            cuts.update(y for y in (box[1], box[3]) if 0 < y < height)
+        self.ys = sorted(cuts)
+        self.bands: List[List[Tuple[float, float]]] = []
+        for lo, hi in zip(self.ys, self.ys[1:]):
+            spans = _free_spans(0, width, [
+                (x1, x2) for x1, y1, x2, y2 in blocked if y1 <= lo and y2 >= hi
+            ])
+            spans += [
+                (max(x1, 0), min(x2, width)) for x1, y1, x2, y2 in own if y1 <= lo and y2 >= hi
+            ]
+            merged: List[Tuple[float, float]] = []
+            for start, end in sorted(spans):
+                if end <= start:
+                    continue
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                else:
+                    merged.append((start, end))
+            self.bands.append(merged)
+
+        first = [0]
+        for spans in self.bands:
+            first.append(first[-1] + len(spans))
+        parent = list(range(first[-1]))
+
+        def root(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        for band in range(len(self.bands) - 1):
+            for i, (a1, a2) in enumerate(self.bands[band]):
+                for j, (b1, b2) in enumerate(self.bands[band + 1]):
+                    if a1 < b2 and b1 < a2:
+                        parent[root(first[band] + i)] = root(first[band + 1] + j)
+        self.pieces = [
+            [root(first[band] + i) for i in range(len(spans))]
+            for band, spans in enumerate(self.bands)
+        ]
+
+    def piece(self, x: float, y: float) -> Optional[int]:
+        """The connected piece the free centre ``(x, y)`` is in, or None."""
+        band = bisect.bisect_right(self.ys, y) - 1
+        for b in (band, band - 1):
+            if 0 <= b < len(self.bands) and self.ys[b] <= y <= self.ys[b + 1]:
+                for (x1, x2), piece in zip(self.bands[b], self.pieces[b]):
+                    if x1 <= x <= x2:
+                        return piece
+        return None
+
+    def centres(self) -> Iterable[Tuple[float, float]]:
+        """One point inside every free span of every band."""
+        for band, spans in enumerate(self.bands):
+            y = (self.ys[band] + self.ys[band + 1]) / 2
+            for x1, x2 in spans:
+                yield (x1 + x2) / 2, y
+
+    def extent(self, pieces: Iterable[int]) -> Optional[_Box]:
+        """The bounding box of ``pieces``, or None when there are none."""
+        wanted = set(pieces)
+        boxes = [
+            (x1, self.ys[band], x2, self.ys[band + 1])
+            for band, spans in enumerate(self.bands)
+            for (x1, x2), piece in zip(spans, self.pieces[band])
+            if piece in wanted
+        ]
+        if not boxes:
+            return None
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _via_blocked(others: List[_Shape], lower: str, upper: str, shape) -> List[_Box]:
+    """Where a via of ``shape`` may not be centred, for its metal below and above."""
+    (below_w, below_h), (above_w, above_h) = shape
+    below, above = _nm(METAL_SPACING_UM[lower]), _nm(METAL_SPACING_UM[upper])
+    return (
+        _grown(others, lower, below + _nm(below_w / 2), below + _nm(below_h / 2))
+        + _grown(others, upper, above + _nm(above_w / 2), above + _nm(above_h / 2))
+    )
+
+
+def _pin_escape(
+    width: int, height: int, own: List[_Shape], others: List[_Shape]
+) -> Tuple[Tuple[int, ...], Optional[_Box]]:
+    """The ``Metal3`` tracks a pin can put a ``Via2`` on, and the Metal2 it reaches.
+
+    A wire of the pin's net runs on Metal1 and Metal2 wherever its centre keeps
+    spacing plus half the wire's width from every other net, and along the pin's
+    own metal; it changes layer through a ``Via1`` wherever both of the via's
+    metal shapes clear the other nets.  Every Metal2 piece reached that way is
+    searched for a ``Via2`` centred on a Metal3 track ``y = 0.42k`` with both
+    of its metal shapes clear.  Returns those tracks in nm, and the bounding
+    box of the Metal2 centres the pin reaches.
+    """
+    wire = {}
+    for layer in ("Metal1", "Metal2"):
+        half = _nm(METAL_SPACING_UM[layer]) + _nm(METAL_WIDTH_UM[layer] / 2)
+        wire[layer] = _FreeSpace(
+            width, height, _grown(others, layer, half, half),
+            [(x1, y1, x2, y2) for _, shape_layer, x1, y1, x2, y2 in own if shape_layer == layer],
+        )
+
+    reached = set()
+    for _, layer, x1, y1, x2, y2 in own:
+        if layer in wire:
+            piece = wire[layer].piece((x1 + x2) / 2, (y1 + y2) / 2)
+            if piece is not None:
+                reached.add((layer, piece))
+
+    links: Dict[Tuple[str, int], set] = {}
+    for shape in VIA_SHAPES_UM:
+        vias = _FreeSpace(width, height, _via_blocked(others, "Metal1", "Metal2", shape))
+        for x, y in vias.centres():
+            below, above = wire["Metal1"].piece(x, y), wire["Metal2"].piece(x, y)
+            if below is not None and above is not None:
+                links.setdefault(("Metal1", below), set()).add(("Metal2", above))
+                links.setdefault(("Metal2", above), set()).add(("Metal1", below))
+    todo = list(reached)
+    while todo:
+        for node in links.get(todo.pop(), ()):
+            if node not in reached:
+                reached.add(node)
+                todo.append(node)
+
+    offset, pitch = (_nm(v) for v in TRACK_UM["y"])
+    lines = [offset + k * pitch for k in range(height // pitch + 1)
+             if 0 < offset + k * pitch < height]
+    tracks = set()
+    for shape in VIA_SHAPES_UM:
+        blocked = _via_blocked(others, "Metal2", "Metal3", shape)
+        for y in lines:
+            if y in tracks:
+                continue
+            spans = _free_spans(0, width, [(x1, x2) for x1, y1, x2, y2 in blocked if y1 < y < y2])
+            if any(("Metal2", wire["Metal2"].piece((x1 + x2) / 2, y)) in reached
+                   for x1, x2 in spans):
+                tracks.add(y)
+
+    metal2 = wire["Metal2"].extent(piece for layer, piece in reached if layer == "Metal2")
+    return tuple(sorted(tracks)), metal2
+
+
+def _pin_escape_problem(
+    name: str, tracks: Tuple[int, ...], metal2: Optional[_Box], others: List[_Shape],
+    height: int,
+) -> str:
+    """Why pin ``name`` has too few ways up, naming the metal that closes the rest.
+
+    For each track within half a pitch of the Metal2 the pin reaches, the other
+    net's shape that keeps a Via2 off the longest stretch of it is named: the
+    bar across the box, not the riser that clips one end of it.
+    """
+    count = len(tracks)
+    on = f" (y = {', '.join(f'{y / 1000:.3f}' for y in tracks)} um)" if tracks else ""
+    text = (
+        f"PIN {name} can put a Via2 on {count} Metal3 track{'' if count == 1 else 's'}"
+        f"{on}; detailed routing needs at least {PIN_ESCAPE_TRACKS_MIN}"
+    )
+    closed = []
+    if metal2 is None:
+        text += (
+            ": no Via1 from the Metal1 its wire can reach lands on Metal2 clear of "
+            "other nets"
+        )
+    else:
+        offset, pitch = (_nm(v) for v in TRACK_UM["y"])
+        narrow = {
+            "Metal2": min(min(below) for below, _ in VIA_SHAPES_UM),
+            "Metal3": min(min(above) for _, above in VIA_SHAPES_UM),
+        }
+        x1, y1, x2, y2 = metal2
+        for k in range(math.ceil((y1 - pitch / 2 - offset) / pitch),
+                       math.floor((y2 + pitch / 2 - offset) / pitch) + 1):
+            y = offset + k * pitch
+            if not 0 < y < height or y in tracks:
+                continue
+            # Grown for the narrower side of a Via2 on both axes, so a shape
+            # named here keeps every one of the four shapes off that stretch.
+            longest = None
+            for owner, layer, ox1, oy1, ox2, oy2 in others:
+                if layer not in narrow:
+                    continue
+                reach = _nm(METAL_SPACING_UM[layer]) + _nm(narrow[layer] / 2)
+                covered = min(ox2 + reach, x2) - max(ox1 - reach, x1)
+                if oy1 - reach < y < oy2 + reach and covered > 0:
+                    if longest is None or covered > longest[0]:
+                        longest = (covered, owner, layer, ox1, oy1, ox2, oy2)
+            if longest is not None:
+                _, owner, layer, ox1, oy1, ox2, oy2 = longest
+                closed.append(
+                    f"y = {y / 1000:.3f} by {layer} of {owner} (RECT {ox1 / 1000:.3f} "
+                    f"{oy1 / 1000:.3f} {ox2 / 1000:.3f} {oy2 / 1000:.3f})"
+                )
+        text += (
+            f": its wire can reach Metal2 only with its centre in x = {x1 / 1000:.3f} "
+            f".. {x2 / 1000:.3f}, y = {y1 / 1000:.3f} .. {y2 / 1000:.3f} um"
+        )
+        if closed:
+            text += f", and a Via2 is kept off track {'; '.join(closed)}"
+    fix = (
+        "Move the metal named above so that a Via2 (Metal2 enclosure 0.29 x 0.21 um, "
+        "0.21 um clear of other nets' Metal2) fits on a second track"
+        if closed else
+        "Clear Metal1 and Metal2 around the pin so that a Via2 (Metal2 enclosure "
+        "0.29 x 0.21 um, 0.21 um clear of other nets' Metal2) fits on two tracks"
+    )
+    return (
+        f"{text}. Walled in like that, every route out of the pin goes up through "
+        "those few Via2 sites, and the router has nothing to trade when a "
+        "neighbour's wire needs one: step 7 stalled at ~400 Metal2 shorts, at every "
+        "die size, on AION_xor2_5, AION_xor2_8 and AION_xnor2_xor2_9, whose inner "
+        "pins each had one such track, and routed clean when the same pins had two. "
+        f"{fix}, y = 0.42k um, or run the pin's own Metal2 out of the enclosure. "
+        "DRC, LVS and pin access do not see this"
+    )
+
+
+def lef_pin_escape_problems(
+    lef_path: Path | str,
+    macro: Optional[str] = None,
+) -> Tuple[str, ...]:
+    """Grade how many ways up out of the cell each signal pin has.
+
+    :func:`lef_pin_access` asks whether a via reaches a pin at all.  This asks
+    whether the router can get the pin's wire *out*: from the pin, along free
+    Metal1 and Metal2 and through ``Via1`` wherever they clear the other nets,
+    to a ``Via2`` on a Metal3 track.  A pin has to reach at least
+    :data:`PIN_ESCAPE_TRACKS_MIN` distinct tracks that way.
+
+    Calibrated on one step-7 placement, 2026-09-14.  After Metal2 was lifted
+    out of the rail via band, ``AION_xor2_5`` (I0, I2), ``AION_xor2_8`` (I0) and
+    ``AION_xnor2_xor2_9`` (I1) each had an inner pin boxed in by a neighbour
+    pin's U-shaped Metal2 below and an obstruction bar above, with a Via2 fitting
+    on one track only (y = 1.26 um).  Detailed routing plateaued at ~415
+    violations, Metal2 shorts through the neighbour's bar, for 60+ iterations at
+    every die size; those three masters held 433 of the 498 markers at
+    iteration 10.  Swapping the same instances back to the abstracts with the
+    bar at y = 0.11 um -- the same boxes, with a second track at y = 0.84 um --
+    routed to 0 violations by iteration 8.  This rule gives exactly those four
+    pins one track, the old abstracts two, every other pin of the ten mined
+    cells four or more, and all 283 signal pins of the PDK library eight.  It
+    does not depend on the exact margin: requiring up to 30 nm more room than
+    minimum spacing changes none of those counts.  It also gives
+    ``AION_mux2i_1`` and ``AION_mux2i_2`` one track on I0; both are already
+    refused for I2, which TritonRoute cannot reach, and have never been routed.
+
+    Metal1 is followed as a route in its own right because TritonRoute takes
+    planar Metal1 access out of a crowded spot and goes up elsewhere: counting
+    only a Via1 over the pin's own Metal1 leaves 33 PDK pins and
+    ``AION_mux2_0``'s I0, I1 and I3 short of two tracks, and every one of them
+    routes clean.  A gap exactly one wire wide is not followed (see
+    :class:`_FreeSpace`).  Only the cell is seen, not its neighbours, and pins
+    drawn on Metal3 or above are not graded.
+    ``collect_cells.check_pin_escape`` in aion_chip applies the same rule at
+    publish and before PnR; the two must stay in step.
+    """
+    path = Path(lef_path)
+    macros = lef_macros(path)
+    if not macros:
+        raise MetricsError(f"{path.name} defines no MACRO")
+    if macro is None:
+        if len(macros) != 1:
+            names = ", ".join(sorted(macros))
+            raise MetricsError(
+                f"{path.name} defines {len(macros)} macros ({names}); "
+                "name the one to check"
+            )
+        macro = next(iter(macros))
+    if macro not in macros:
+        raise MetricsError(
+            f"{path.name} defines no MACRO {macro!r}; it has: "
+            + ", ".join(sorted(macros))
+        )
+    body = macros[macro]
+    size = _LEF_SIZE_RE.search(body)
+    if size is None:
+        raise MetricsError(f"MACRO {macro} in {path.name} carries no SIZE line")
+    width, height = _nm(float(size.group(1))), _nm(float(size.group(2)))
+
+    def shapes(owner: str, block: str) -> List[_Shape]:
+        return [(owner, layer, *(_nm(v) for v in rect))
+                for layer, *rect in _layer_rects(block)]
+
+    obs_block = _LEF_OBS_RE.search(body)
+    obs = shapes("OBS", obs_block.group(1)) if obs_block else []
+    pin_blocks = _LEF_PIN_RE.findall(body)
+    pins = {name: shapes(f"PIN {name}", pin_body) for name, pin_body in pin_blocks}
+
+    problems: List[str] = []
+    for name, pin_body in pin_blocks:
+        use = _LEF_USE_RE.search(pin_body)
+        if use is not None and use.group(1).upper() in ("POWER", "GROUND"):
+            continue
+        if use is None and name.upper() in POWER_PIN_NAMES:
+            continue
+        layers = {shape[1] for shape in pins[name]}
+        # No routing geometry is lef_pin_access's to report; a pin already on
+        # Metal3 or above is past the Via2 counted here.
+        if (not layers & {"Metal1", "Metal2"}
+                or layers & {"Metal3", "Metal4", "Metal5"}):
+            continue
+        others = obs + [shape for other, rects in pins.items() if other != name for shape in rects]
+        tracks, metal2 = _pin_escape(width, height, pins[name], others)
+        if len(tracks) < PIN_ESCAPE_TRACKS_MIN:
+            problems.append(_pin_escape_problem(name, tracks, metal2, others, height))
+    return tuple(problems)
+
+
 def pdk_lef_geometry(
     macros: List[str],
     lef_path: Path | str,
@@ -946,9 +1473,11 @@ __all__ = [
     "gds_boundary",
     "cross_net_overlaps",
     "layer_inventory",
+    "lef_abutment_problems",
     "lef_macro_geometry",
     "lef_macros",
     "lef_pin_access",
+    "lef_pin_escape_problems",
     "pdk_lef_geometry",
     "routing_metals_used",
     "drawn_shapes",

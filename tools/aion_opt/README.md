@@ -62,7 +62,9 @@ technology dictionary are skipped as black boxes.
 
 **2. Build the graph.** Only *combinational* cells become graph nodes;
 flip-flops, latches, clock gates, fill, decap, tap and antenna cells are
-excluded. Drive-strength variants collapse onto one generic type
+excluded, and so is any cell whose dictionary entry carries
+`"mineable": false` -- a hand-designed cell that must stay a leaf. An
+excluded cell stays in the netlist and its pins become pattern boundaries. Drive-strength variants collapse onto one generic type
 (`sg13g2_buf_1`, `sg13g2_buf_4`, `sg13g2_buf_16` → `sg13g2_buf`) so the same
 logical pattern is recognised whatever the sizing.
 

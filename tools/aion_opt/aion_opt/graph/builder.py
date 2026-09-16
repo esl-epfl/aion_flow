@@ -145,9 +145,13 @@ def build_signal_flow_graph(
     circuit: "Circuit",
     cell_lib: "CellLib",
 ) -> SignalFlowGraph:
-    """Build the directed signal-flow graph used for pattern mining."""
+    """Build the directed signal-flow graph used for pattern mining.
+
+    Its nodes are the mineable cells (:meth:`CellLib.mineable_types`): every
+    combinational cell, less any the dictionary marks ``"mineable": false``.
+    """
     return SignalFlowGraph(
         circuit,
-        cell_lib.combinational_types(),
+        cell_lib.mineable_types(),
         collapse=cell_lib.collapse_name,
     )

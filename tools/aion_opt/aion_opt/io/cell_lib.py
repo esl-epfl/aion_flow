@@ -160,6 +160,21 @@ class CellLib:
             return False
         return self.is_logic(cell_type)
 
+    def is_mineable(self, cell_type: str) -> bool:
+        """Whether ``cell_type`` may become a node of a mined pattern.
+
+        Every combinational cell may, unless its dictionary entry says
+        ``"mineable": false``.  That is how a hand-designed cell spliced into
+        the dictionary (aion_chip's scripts/merge_tech_dict.py marks every
+        PDK-extension cell so) stays a leaf: the miner treats it the way it
+        treats a flip-flop -- kept in the netlist, its pins a pattern
+        boundary -- instead of folding it into a cell the minimizer would
+        rebuild from its function and lose the design of.
+        """
+        if not self.is_combinational(cell_type):
+            return False
+        return self.info(cell_type).get("mineable", True) is not False
+
     def is_sequential(self, cell_type: str) -> bool:
         """Heuristic sequential-cell detection."""
         if cell_type not in self:
@@ -172,6 +187,10 @@ class CellLib:
 
     def combinational_types(self) -> set[str]:
         return {ct for ct in self.cells if self.is_combinational(ct)}
+
+    def mineable_types(self) -> set[str]:
+        """The cell types the pattern miner builds its graph from."""
+        return {ct for ct in self.cells if self.is_mineable(ct)}
 
     def sequential_types(self) -> set[str]:
         return {ct for ct in self.cells if self.is_sequential(ct)}

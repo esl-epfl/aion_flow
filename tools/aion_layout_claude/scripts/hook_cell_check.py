@@ -41,7 +41,24 @@ import tempfile
 from pathlib import Path
 
 TOOL_DIR = Path(__file__).resolve().parent.parent
-CELLS_DIR = TOOL_DIR / "cells"
+
+#: Directories whose ``*.py`` files are generators.  A driver that keeps its
+#: generators elsewhere names the one it is drawing with AION_LAYOUT_GENERATOR
+#: (and its netlist with AION_LAYOUT_NETLIST), so the check follows the file
+#: the session is actually editing rather than this tool's own scratch space.
+CELLS_DIRS = (TOOL_DIR / "cells", TOOL_DIR / "examples" / "cells")
+#: Where a standalone run's netlists are looked for, by the flow's naming.
+NETLIST_DIRS = (TOOL_DIR, TOOL_DIR / "examples")
+
+
+def _env_path(name: str) -> Path | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).resolve()
+    except OSError:
+        return None
 
 #: The check runs the generator, so it needs a wall-clock limit of its own.
 BUILD_TIMEOUT = 60
@@ -75,7 +92,10 @@ def target_path(payload: dict) -> Path | None:
         resolved = path.resolve()
     except OSError:
         return None
-    if resolved.parent != CELLS_DIR:
+    generator = _env_path("AION_LAYOUT_GENERATOR")
+    if generator is not None:
+        return resolved if resolved == generator else None
+    if resolved.parent not in CELLS_DIRS:
         return None
     if resolved.name.startswith("_") or resolved.name == "__init__.py":
         return None
@@ -179,20 +199,24 @@ def probe(module: Path, cell: str, gds: Path, netlist: Path | None) -> dict:
 
 def find_netlist(cell: str) -> Path | None:
     """Find the netlist for ``cell`` by the naming the flow uses, or None."""
-    for name in (
-        f"{cell}.spice",
-        f"{cell}_minimized.spice",
-        f"{cell.removesuffix('_1')}_minimized.spice",
-    ):
-        candidate = TOOL_DIR / name
-        if candidate.is_file():
-            return candidate
+    named = _env_path("AION_LAYOUT_NETLIST")
+    if named is not None and named.is_file():
+        return named
+    for directory in NETLIST_DIRS:
+        for name in (
+            f"{cell}.spice",
+            f"{cell}_minimized.spice",
+            f"{cell.removesuffix('_1')}_minimized.spice",
+        ):
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
     return None
 
 
 def render(cell: str, module: Path, result: dict) -> str:
     """Turn the probe's measurements into the lines the session will read."""
-    lines = [f"aion-layout static check of cells/{module.name} (advisory, not a verdict):"]
+    lines = [f"aion-layout static check of {module.name} (advisory, not a verdict):"]
 
     if "probe_failed" in result:
         lines.append(f"  CHECK DID NOT RUN: {result['probe_failed']}")
@@ -267,7 +291,7 @@ def main() -> int:
     module = target_path(payload)
     if module is None:
         return 0
-    cell = module.stem
+    cell = os.environ.get("AION_LAYOUT_CELL", "").strip() or module.stem
     with tempfile.TemporaryDirectory(prefix="aion_hook_") as tmp:
         gds = Path(tmp) / f"{cell}.gds"
         result = probe(module, cell, gds, find_netlist(cell))

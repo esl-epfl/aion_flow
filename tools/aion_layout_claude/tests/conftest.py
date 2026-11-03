@@ -121,7 +121,7 @@ def known_gds() -> Path:
 @pytest.fixture(scope="session")
 def netlist_path() -> Path:
     """The transistor-level AION netlist the layout must match."""
-    path = TOOL_DIR / f"{CELL}_minimized.spice"
+    path = TOOL_DIR / "examples" / f"{CELL}_minimized.spice"
     assert path.is_file(), f"the worked netlist is missing: {path}"
     return path
 
@@ -129,7 +129,7 @@ def netlist_path() -> Path:
 @pytest.fixture(scope="session")
 def gate_netlist_path() -> Path:
     """The same logic as three abutted PDK standard cells."""
-    path = TOOL_DIR / f"{GATE_CELL}.spice"
+    path = TOOL_DIR / "examples" / f"{GATE_CELL}.spice"
     assert path.is_file(), f"the gate-level netlist is missing: {path}"
     return path
 

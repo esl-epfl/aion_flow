@@ -37,7 +37,7 @@ make verify        # build + DRC + LVS, and the graded verdict
 ```
 
 `make verify` builds `build/AION_inv_nand2_nor2_1/AION_inv_nand2_nor2_1.gds` from
-`cells/AION_inv_nand2_nor2_1.py`, runs Magic DRC, KLayout DRC and Netgen LVS,
+`examples/cells/AION_inv_nand2_nor2_1.py`, runs Magic DRC, KLayout DRC and Netgen LVS,
 measures the footprint, and prints one verdict block. This is that block, as it
 really comes out (one further line above it names the report file it wrote):
 
@@ -193,9 +193,9 @@ result by accident. Those are the three wildcards the guards above cover.
 | Variable | Default | Meaning |
 |---|---|---|
 | `CELL` | `AION_inv_nand2_nor2_1` | the cell being built |
-| `CELL_MODULE` | `cells/$(CELL).py` | the generator the model writes |
-| `NETLIST` | `AION_inv_nand2_nor2_1_minimized.spice` | transistor-level truth for LVS and device widths |
-| `BASELINE` | `AION_inv_nand2_nor2.spice` | the gate-level netlist of the PDK cells to beat |
+| `CELL_MODULE` | `examples/cells/$(CELL).py` if it exists, else `cells/$(CELL).py` | the generator the model writes |
+| `NETLIST` | `examples/AION_inv_nand2_nor2_1_minimized.spice` | transistor-level truth for LVS and device widths |
+| `BASELINE` | `examples/AION_inv_nand2_nor2.spice` | the gate-level netlist of the PDK cells to beat |
 | `BUILD_DIR` | `build/$(CELL)` | everything for one cell lands here |
 | `RESIZED` | `$(CELL)s.spice` | where `resize` writes; it never edits `NETLIST` |
 | `MIN_DEPTH` | `2` | `resize` leaves stacks this deep and shallower alone |
@@ -357,7 +357,7 @@ win:
 RESIZE: AION_inv_nand2_nor2_1 -> AION_inv_nand2_nor2_1s  x2 on 3 device(s), 7 columns, 9 sites, 16.330 um2 (budget 19.958)
 ```
 
-`cells/AION_inv_nand2_nor2_1s.py` lays that netlist out. Folding a series chain
+`examples/cells/AION_inv_nand2_nor2_1s.py` lays that netlist out. Folding a series chain
 turns the pmos row into a **palindrome** around the output, so every internal
 node appears twice and needs a strap — which is what its two Metal2 tracks are
 for, and what its module docstring works through. It is DRC clean on both
@@ -392,7 +392,7 @@ Regenerate either table with `make flow`; it is written to
 ## The exported views
 
 `make export` writes one directory of views, in the shape
-[`output_constr.md`](output_constr.md) describes — a consumer discovers cells by
+[`output_constr.md`](docs/output_constr.md) describes — a consumer discovers cells by
 file stem, so `build/<cell>/final/<cell>.{gds,lef,lib,v,spice,cdl}` is what it
 needs. One Liberty file is published as `<cell>.lib`; several are one per
 corner and keep the names the characterizer gave them, because renaming them to
@@ -572,10 +572,17 @@ tools/aion_layout_claude/
 ├── SKILL.md                        # the model-facing skill: how to draw a cell
 ├── Makefile                        # every target above; one CLI call each
 ├── pytest.ini                      # host-only by default: -m "not docker"
-├── output_constr.md                # what a consumer requires of the views
-├── ref_makefile_1.mk               # reference: the JKU analog flow's Makefile
-├── AION_inv_nand2_nor2_1_minimized.spice   # worked example, transistor level
-├── AION_inv_nand2_nor2.spice               # the same logic, three PDK cells
+├── docs/
+│   ├── output_constr.md            # what a consumer requires of the views
+│   └── ref_makefile_1.mk           # reference: the JKU analog flow's Makefile
+├── examples/                       # the worked example -- inputs, not run output
+│   ├── AION_inv_nand2_nor2_1_minimized.spice   # transistor level
+│   ├── AION_inv_nand2_nor2_1s.spice            # its resized variant
+│   ├── AION_inv_nand2_nor2.spice               # the same logic, three PDK cells
+│   └── cells/
+│       ├── AION_inv_nand2_nor2_1.py    # complete, verified worked example
+│       ├── AION_inv_nand2_nor2_1s.py   # the resized variant
+│       └── _m2_probe.py                # a clean cell exercising the Metal2/Via1 helpers
 │
 ├── aion_layout/                    # the package; importable straight from here
 │   ├── cli.py                      # every subcommand; the Makefile calls only this
@@ -608,9 +615,9 @@ tools/aion_layout_claude/
 │   ├── doc_generator.py            # markdown report for a verified cell
 │   └── gds_to_python.py            # GDS -> a runnable generator
 │
-├── cells/                          # the generators.  The model edits these.
-│   ├── AION_inv_nand2_nor2_1.py    # complete, verified worked example
-│   └── _m2_probe.py                # a clean cell exercising the Metal2/Via1 helpers
+├── cells/                          # git-ignored: generators written by a standalone
+│                                   #   `make scaffold`.  A driver passes CELL_MODULE
+│                                   #   and keeps its generators outside this tool.
 │
 ├── scripts/
 │   ├── docker_run.sh               # one command inside iic-osic-tools, from here
@@ -844,7 +851,7 @@ pin pair, and the SDF then carries `COND` records that this model has no
 **Only one cell has ever been through the flow.** Everything in this README is
 measured, and all of it is measured on `AION_inv_nand2_nor2_1`: three inputs,
 one output, eight devices, Metal1 only. The Metal2 helpers have a DRC-clean
-probe cell (`cells/_m2_probe.py`) but no cell in the flow uses them, and the
+probe cell (`examples/cells/_m2_probe.py`) but no cell in the flow uses them, and the
 baseline builder has abutted exactly one row of exactly three PDK cells. Treat
 every "it works" here as "it worked once, on this".
 

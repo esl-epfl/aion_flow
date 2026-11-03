@@ -19,10 +19,14 @@ and `PYTHONPATH=.` (the `Makefile` sets it for you).
 
 ```bash
 make scaffold CELL=<cell> NETLIST=<netlist.spice>   # once: a starting generator
-$EDITOR cells/<cell>.py                             # ← the only thing you do by hand
+$EDITOR <generator>.py                              # ← the only thing you do by hand
 make verify  CELL=<cell> NETLIST=<netlist.spice>    # build + DRC + LVS + pin access + abutment + TritonRoute, one RESULT: line
 make evidence CELL=<cell> NETLIST=<netlist.spice>   # what to fix, with coordinates
 ```
+
+The generator is `CELL_MODULE`: `cells/<cell>.py` by default. When your task names a
+different file, pass `CELL_MODULE=<that file>` to every `make` call, or the tool will build
+some other generator than the one you are editing.
 
 Repeat `edit → verify → evidence` until `RESULT: PASS`. Then, once, the rest:
 
@@ -34,7 +38,7 @@ which runs verify → PEX → build and verify the abutted baseline → characte
 compare → export, and ends in a `COMPARE:` line and `final/` full of views.
 
 A generator is a module exposing `generate(name: str, tech: Tech) -> Cell`. Start from
-`cells/AION_inv_nand2_nor2_1.py`; it is a complete, verified example. **All coordinates
+`examples/cells/AION_inv_nand2_nor2_1.py`; it is a complete, verified example. **All coordinates
 are integers in nanometres.**
 
 ### Reading the evidence
@@ -147,7 +151,7 @@ cells at drive 1 are Metal1-only, and so is the worked example.
 
 When you do use it: `draw_via1`, `draw_via1_array`, `draw_m2_wire` and `draw_m2_pin` in
 `aion_layout.building_blocks` size the landings from the rules for you and raise rather
-than draw something illegal. `cells/_m2_probe.py` is a DRC-clean cell exercising all of
+than draw something illegal. `examples/cells/_m2_probe.py` is a DRC-clean cell exercising all of
 them — build it if you want a worked example of the geometry.
 
 ---
@@ -479,7 +483,7 @@ no multiplier fits it says so rather than quietly changing nothing and reporting
 Then lay out the resized cell. Folding changes the floorplan: a series chain of N-finger
 devices lays out as a **palindrome** around its output node, so every internal node
 appears twice and needs a strap, and the gate pairs at the outer columns do too. That is
-what the two Metal2 tracks in `cells/AION_inv_nand2_nor2_1s.py` are for, and its module
+what the two Metal2 tracks in `examples/cells/AION_inv_nand2_nor2_1s.py` are for, and its module
 docstring works the whole thing through.
 
 If the loss really is the layout: recount the columns and re-derive the gate order. It is

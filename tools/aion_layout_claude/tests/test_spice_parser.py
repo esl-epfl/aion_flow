@@ -14,7 +14,7 @@ size and every downstream rule check then argues about the wrong shape.  A
 terminal the schematic does not have, which is the single most expensive way to
 fail LVS: the layout looks finished and is wrong at its interface.
 
-Ground truth is ``AION_inv_nand2_nor2_1_minimized.spice``, the worked example
+Ground truth is ``examples/AION_inv_nand2_nor2_1_minimized.spice``, the worked example
 this whole tool exists to lay out: 8 transistors, 4 n and 4 p, six ports, three
 internal nets.
 """
@@ -37,7 +37,7 @@ INTERNAL = {"I1_bar", "net_p_0", "net_p_1"}
 
 @pytest.fixture(scope="module")
 def subckt(request):
-    path = request.config.rootpath / f"{CELL}_minimized.spice"
+    path = request.config.rootpath / "examples" / f"{CELL}_minimized.spice"
     assert path.is_file(), f"the worked netlist is missing: {path}"
     return parse_first_subckt(path)
 

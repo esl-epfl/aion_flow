@@ -4,3 +4,6 @@ build/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Generators written by standalone `make scaffold`; the worked examples are
+# under examples/cells/.  A driver keeps its generators outside this tool.
+cells/

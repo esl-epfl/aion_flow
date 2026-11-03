@@ -20,12 +20,16 @@
 
 # ---- What is being built.  Override any of these on the command line. -------
 CELL          ?= AION_inv_nand2_nor2_1
-CELL_MODULE   ?= cells/$(CELL).py
+# Where a generator lives.  The worked examples ship under examples/cells/;
+# every other generator goes to cells/, which is git-ignored scratch space for
+# standalone use.  A driver (the AION framework) always passes CELL_MODULE
+# explicitly and keeps its generators outside this tool.
+CELL_MODULE   ?= $(if $(wildcard examples/cells/$(CELL).py),examples/cells/$(CELL).py,cells/$(CELL).py)
 # The worked example's transistor-level netlist is not named $(CELL).spice, so
 # it is spelled out; for any other cell override NETLIST along with CELL.
-NETLIST       ?= AION_inv_nand2_nor2_1_minimized.spice
+NETLIST       ?= examples/AION_inv_nand2_nor2_1_minimized.spice
 # The same logic as the PDK standard cells it replaces -- what CELL must beat.
-BASELINE      ?= AION_inv_nand2_nor2.spice
+BASELINE      ?= examples/AION_inv_nand2_nor2.spice
 
 # `make resize` widens the series stacks of NETLIST and writes a NEW cell here;
 # it never edits NETLIST, because that file is what LVS grades the layout

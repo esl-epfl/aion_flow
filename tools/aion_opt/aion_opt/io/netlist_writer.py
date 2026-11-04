@@ -29,6 +29,21 @@ def _sanitize(name: str) -> str:
     return sanitized or "_unnamed_"
 
 
+_SIMPLE_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _instance_id(name: str) -> str:
+    """An instance name as written: unchanged if legal, else an escaped identifier.
+
+    Escaping (rather than _sanitize) keeps the name identical to the input
+    netlist's, e.g. a flattened hierarchical `u_top.u_icg`, so tools that
+    match instances by name (LEC, SDC) still find it.
+    """
+    if _SIMPLE_ID.match(name):
+        return name
+    return "\\" + re.sub(r"\s", "_", name) + " "
+
+
 def _bit_to_verilog(
     bit: int | str,
     bit_to_net: dict[int, str],
@@ -159,7 +174,7 @@ def write_verilog(circuit: "Circuit", path: Path) -> None:
         conns = _format_connections(
             inst.connections, bit_to_net, bit_to_port_slice
         )
-        lines.append(f"  {inst.cell_type} {inst.name} (")
+        lines.append(f"  {inst.cell_type} {_instance_id(inst.name)} (")
         for i, conn in enumerate(conns):
             tail = "," if i < len(conns) - 1 else ""
             lines.append(f"    {conn}{tail}")

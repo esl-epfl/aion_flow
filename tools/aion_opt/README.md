@@ -51,7 +51,7 @@ netlist.v ──yosys──> Yosys JSON ──> Circuit ──> signal-flow grap
                                           ┌──────────┴──────────┐
                                     cell generation        netlist rewrite
                                           │                      │
-                            aion_cells.v / _elite.v        aion_netlist.v
+                            aion_cells.v / _elite.v      <top>_optimized.v
                                                                  │
                                                                 LEC
 ```
@@ -145,10 +145,13 @@ Outputs:
 
 | Output | Default | Contents |
 |--------|---------|----------|
-| `CELLS` | `$(BUILD_DIR)/aion_cells.v` | every generated cell |
-| `ELITE_CELLS` | `$(BUILD_DIR)/aion_cells_elite.v` | the best `ELITE_COUNT` cells |
-| `PATTERN_REPORT` | `$(BUILD_DIR)/pattern_report.json` | patterns found, selected and ranked |
-| `SELECTION` | `$(BUILD_DIR)/work/selection.json` | mining result reused by `rewrite` |
+| `CELLS` | `$(BUILD_DIR_OPT)/aion_cells.v` | every generated cell |
+| `ELITE_CELLS` | `$(BUILD_DIR_OPT)/aion_cells_elite.v` | the best `ELITE_COUNT` cells |
+| `PATTERN_REPORT` | `$(BUILD_DIR_OPT)/pattern_report.json` | patterns found, selected and ranked |
+| `SELECTION` | `$(BUILD_DIR_OPT)/work/selection.json` | mining result reused by `rewrite` |
+
+`BUILD_DIR_OPT` is `$(BUILD_DIR)/aion_opt`, so `BUILD_DIR=build/mydesign`
+writes under `build/mydesign/aion_opt/`.
 
 ### `aion-opt-rewrite`
 
@@ -166,8 +169,8 @@ Point `CELLS` at `aion_cells_elite.v` — or at a hand-edited file — to rewrit
 with a subset:
 
 ```bash
-make aion-opt-rewrite CELLS=build/mydesign/aion_cells_elite.v \
-                      REWRITE_NETLIST=build/mydesign/aion_netlist_elite.v
+make aion-opt-rewrite CELLS=build/mydesign/aion_opt/aion_cells_elite.v \
+                      REWRITE_NETLIST=build/mydesign/aion_opt/mydesign_optimized_elite.v
 ```
 
 Outputs: `REWRITE_NETLIST` (hierarchical), `REWRITE_FLAT` (optional, PDK cells
@@ -208,7 +211,7 @@ re-mining.
 
 ```bash
 make aion-opt-select-elite ELITE_COUNT=10 ELITE_METRIC=occurrences \
-                           ELITE_CELLS=build/mydesign/aion_cells_top10.v
+                           ELITE_CELLS=build/mydesign/aion_opt/aion_cells_top10.v
 ```
 
 ### `aion-opt-run-all`
@@ -239,7 +242,7 @@ arguments.
 
 ```bash
 python -m aion_opt cells-to-spice \
-    --cells build/mydesign/aion_cells_elite.v \
+    --cells build/mydesign/aion_opt/aion_cells_elite.v \
     --gates tech/spice/sg13g2_stdcell.spice \
     --output-dir build/mydesign/spice
 ```
@@ -420,6 +423,8 @@ and a YAML config key.
 | `MAX_INPUTS` | `--max-inputs` | (no limit) | Cap on boundary inputs |
 | `AREA_FACTOR` | `--area-factor` | `0.85` | Assumed AION cell area relative to the cells it replaces |
 | `JOBS` | `--jobs` | all cores | Mining workers. `0` = all cores, `1` = serial, negative = leave that many cores free |
+| `COLLAPSE_STRENGTHS` | `--no-collapse-strengths` (when `0`) | `1` | Fold drive strengths (`sg13g2_buf_1/_4/_16`) onto one generic type |
+| `ALLOW_OVERLAPPING` | `--allow-overlapping` | (unset) | Keep every occurrence instead of a disjoint cover. Analysis only: `generate-cells` accepts it, `rewrite` does not |
 
 ### Cell library
 
@@ -577,6 +582,7 @@ python -m pytest tools/aion_opt/tests -q
 | `test_complements.py` | Inverter recognition, complement lookup (per bit, not per bus), the cost arithmetic |
 | `test_cell_file_markers.py` | Both library markers, including through an elite slice |
 | `test_complement_flow.py` | The whole inverted-input loop, Yosys-proved — and proved to reject a mis-driven port |
+| `test_netlist_writer.py` | Structural Verilog emission of names that are not plain identifiers (escaped hierarchical and `$abc` names) |
 
 The end-to-end tests need Yosys on `PATH` and skip themselves otherwise. LEC and
 SEC are not part of the suite because they need the EDA container; run

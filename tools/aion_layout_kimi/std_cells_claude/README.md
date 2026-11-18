@@ -21,7 +21,7 @@ so nothing is folded and there is no quantisation error at all.
 | file | what |
 |---|---|
 | `AION_inv_nand2_nor2_1.py` | the generator; exposes `generate(cell_name, tech) -> Cell` for `make`, and runs standalone too |
-| `AION_inv_nand2_nor2_1.gds` | the layout |
+| `AION_inv_nand2_nor2_1.gds` | the layout; not committed (`*.gds` is git-ignored), rebuild it with `make gds` below |
 | `AION_inv_nand2_nor2_1.png` | rendering via `scripts/gds_to_image.py` |
 | `drc/` | Magic + KLayout DRC run directories |
 | `lvs/` | Magic extraction + netgen run directory |
@@ -83,7 +83,7 @@ from `CELL_MODULE`, so overriding `CELL_NAME` alone makes `make` build the
 overwrite it.  Set them once and the targets are short:
 
 ```sh
-cd tools/aion_layout
+cd tools/aion_layout_kimi
 export CELL_MODULE=std_cells_claude/AION_inv_nand2_nor2_1.py
 export RUNS_DIR=std_cells_claude
 export NETLIST=AION_inv_nand2_nor2_1_minimized.spice

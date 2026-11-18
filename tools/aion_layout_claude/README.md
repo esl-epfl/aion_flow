@@ -605,6 +605,7 @@ tools/aion_layout_claude/
 │   ├── baseline.py                 # abut the PDK cells into the comparison row
 │   ├── characterize.py             # PEX, then ngspice over the corners
 │   ├── liberty.py                  # read a .lib back: cells, arcs, functions, tables
+│   ├── resize.py                   # widen and fold series stacks into a new netlist
 │   ├── logic.py                    # what the netlist computes: switch-level truth
 │   │                               #   table, minimised expression, .lib functions
 │   ├── exporters.py                # the six views, and the LEF checks
@@ -633,9 +634,10 @@ tools/aion_layout_claude/
 │
 ├── tests/
 │   ├── conftest.py                 # fixtures; the committed reports stay read-only
-│   ├── test_*.py                   # ten modules: the verdict surface, absence-is-
-│   │                               #   not-clean, metrics, runner, spice_parser,
-│   │                               #   scaffold, liberty, logic, exporters, compare
+│   ├── test_*.py                   # thirteen modules: the verdict surface, absence-
+│   │                               #   is-not-clean, metrics, runner, spice_parser,
+│   │                               #   scaffold, liberty, logic, exporters, compare,
+│   │                               #   resize, pin_access, characterize_driver
 │   └── fixtures/                   # real clean and dirty DRC/LVS output, committed
 │
 └── build/                          # run output, one directory per cell
@@ -810,13 +812,13 @@ modelled. See `PEX_MODE_DEFAULT` there for the argument in full.
 
 ## Known gaps
 
-**The worked example loses.** `make flow` runs end to end and the answer is
-`COMPARE: LOSS`: 45.5 % smaller, 28.6 % slower at the typical corner. The tool
-is correct and the cell is not good enough, and those are different problems.
-The cause is in the netlist rather than the layout — a three-deep pmos pull-up
-against the NOR2's two — so the next move is `aion_minimizer`'s sizing or a
-floorplan that contacts the internal series nodes, at the price of a site. See
-[Delay](#delay). Nothing in this repository has yet produced a `COMPARE: WIN`.
+**The worked example loses; its resized variant wins.** `make flow` on the
+default cell runs end to end and answers `COMPARE: LOSS`: 45.5 % smaller,
+28.6 % slower at the typical corner. The cause is in the netlist rather than
+the layout — a three-deep pmos pull-up against the NOR2's two — and
+`make resize` is the fix: `AION_inv_nand2_nor2_1s` is 18.2 % smaller and 19.0 %
+faster, `COMPARE: WIN`, at the price of 64 % more input capacitance. See
+[Delay](#delay) and [Resizing, and the win](#resizing-and-the-win).
 
 **The technology description stops at Metal2, and so the measurements do.**
 `tech.py` defines `Activ`, `NSD`, `PSD`, `NWell`, `PWell`, `GatPoly`, `Cont`,
@@ -848,12 +850,13 @@ pin pair, and the SDF then carries `COND` records that this model has no
 `ifnone`/conditional paths to receive: the last matching annotation wins.
 `aion_char` writes no `when`-qualified delay arcs today, so nothing is lost yet.
 
-**Only one cell has ever been through the flow.** Everything in this README is
-measured, and all of it is measured on `AION_inv_nand2_nor2_1`: three inputs,
-one output, eight devices, Metal1 only. The Metal2 helpers have a DRC-clean
-probe cell (`examples/cells/_m2_probe.py`) but no cell in the flow uses them, and the
-baseline builder has abutted exactly one row of exactly three PDK cells. Treat
-every "it works" here as "it worked once, on this".
+**Everything in this README is measured on one cell.** The numbers above all
+come from `AION_inv_nand2_nor2_1` and its resized variant `_1s`: three inputs,
+one output, eight devices; `_1s` is the one that uses the Metal2 helpers. The
+tool has since drawn more cells as step 6 of `aion_framework` (mined cells
+of the cve2, sha256 and posit_alu runs, and hand-designed PDK-extension
+cells), with both `COMPARE: WIN` and `COMPARE: LOSS` verdicts. Those runs
+live in the framework's `runs/` and `library/`, not here.
 
 **KLayout DRC runs at `macro` level.** `verification.run_drc` invokes
 `sak-drc.sh -d -b -l macro`. In the script's own words, `macro` "adds off-grid,
@@ -884,7 +887,7 @@ pytest to quiet level 2 and drops the summary line — so the target prints thre
 rows of dots and nothing else, and a suite that silently collected nothing would
 look the same as one that passed. Run it as `python3 -m pytest tests/` (no flag;
 `pytest.ini` supplies the `-q` and the `-m "not docker"` deselection) to get the
-line that matters: `201 passed, 1 deselected in 2.93s`.
+line that matters: `370 passed, 1 deselected in 4.10s`.
 
 **`aion_layout/__init__.py` re-exports only `Layer`, `Tech` and `sg13g2_tech`.**
 Every other module is imported by its full path, which is what the modules

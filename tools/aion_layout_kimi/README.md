@@ -1,4 +1,8 @@
-# AION Layout
+# AION Layout (Kimi / Copilot-gateway harness)
+
+> This is the earlier closed-loop harness. The layout tool the AION flow
+> actually uses is [`aion_layout_claude`](../aion_layout_claude/README.md);
+> nothing in the root `Makefile` or in `aion_framework` calls this directory.
 
 Technology-aware standard-cell layout tooling for the IHP SG13G2 PDK, plus a
 closed-loop harness that drives a language model to draw a cell from a SPICE
@@ -19,7 +23,7 @@ reports and grades. That separation is deliberate and is enforced by tests.
 ## Quick start — the flow
 
 ```bash
-make flow          # ./orchestrate.sh AION_inv_nand2_nor2_1_minimized.spice build 10
+make flow          # ./orchestrate.sh AION_inv_nand2_nor2_1_minimized.spice build 2
 ```
 
 Requires: the `iic-osic-tools_shell_uid_1000` Docker container running, `jq`,
@@ -202,7 +206,7 @@ other candidate is indented out of column 0.
 ## Verifying it yourself
 
 ```bash
-make test          # 339 tests, no Docker, no model, ~8 s
+make test          # 368 tests, no Docker, no model, ~15 s
 ```
 
 The suite runs against committed fixtures in `tests/fixtures/`, captured from a
@@ -222,6 +226,8 @@ real failing run, so it survives `make clean`.
 | `test_draw_tap.py` | implants, cuts, enclosures, minimum sizes |
 | `test_shell_surface.py` | `bash -n`; the prompt carries the evidence and none of the dead references |
 | `test_scope_guards.py` | no cell-specific geometry leaked into model-visible docs |
+| `test_curriculum.py` | the Stage 5 curriculum: rungs, gating, branching |
+| `test_stage3_stage4.py` | the reference-cell ranker, the iteration scorer and the ledger |
 
 Ground truth the fixtures pin, and that the parsers must keep reproducing:
 Magic 8 violations (`LU.a` ×4, `LU.b` ×4, `COUNT: 8`); KLayout 1 item `LU.b`;
@@ -235,7 +241,7 @@ Netgen `failed_pin_matching`, `sg13_lv_nmos` and `sg13_lv_pmos` both
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MODEL` | `moonshotai/Kimi-K2.7-Code` | Inference model id; see `copilot-rcp.sh --list` |
+| `MODEL` | `openai/gpt-oss-120b` | Inference model id; see `copilot-rcp.sh --list`. `moonshotai/Kimi-K2.7-Code` and `Qwen/Qwen3.5-397B-A17B` are the commented alternatives in `orchestrate.sh` |
 | `CEFPROVIDER_API_KEY` | — | Gateway key. Required for a real run |
 | `FIX_TIMEOUT` | `12m` | Wall-clock budget for one model call |
 | `MODEL_EFFORT` | `low` | Reasoning effort passed to the CLI. Measured to be a **no-op for Kimi** on this gateway; kept because it matters for the other models. See [SUMMARY.md](SUMMARY.md) |
@@ -246,10 +252,12 @@ Netgen `failed_pin_matching`, `sg13_lv_nmos` and `sg13_lv_pmos` both
 | `EVIDENCE_TIMEOUT` | `300` | Seconds the evidence packet may take, digest subprocess included |
 | `MEMORY_INLINE_BYTES` | `4000` | Bytes of `memory.md` inlined into the prompt |
 | `AION_DUMP_PROMPT` | — | Assemble the prompt, write it to this path, exit |
-| `COPILOT_RCP` | `../../copilot-rcp.sh` | Path to the gateway wrapper |
+| `COPILOT_RCP` | an absolute path to `copilot-rcp.sh`, hard-coded in `orchestrate.sh` | Path to the gateway wrapper; set it on any other machine |
 
-The default is **Kimi**, configured at a 262k window in `copilot-rcp.sh`.
-`Qwen/Qwen3.5-397B-A17B` is the other tested option, at 128k. A rung's prompt is
+The measurements in this README and in [SUMMARY.md](SUMMARY.md) were taken
+with **Kimi**, configured at a 262k window in `copilot-rcp.sh`;
+`Qwen/Qwen3.5-397B-A17B` is the other tested option, at 128k. The current
+default in `orchestrate.sh` is `openai/gpt-oss-120b`. A rung's prompt is
 3–7k tokens, so both fit comfortably — prompt size has never been the binding
 constraint. See [SUMMARY.md](SUMMARY.md) for what was.
 
@@ -262,9 +270,12 @@ constraint. See [SUMMARY.md](SUMMARY.md) for what was.
 | `drc` / `lvs` / `verify` | Run the tools and print a summary |
 | `selfcheck` | The same chain the host grades with, on one module |
 | `netlist` | Scaffold a generator from a SPICE netlist |
-| `doc` / `gds2py` | Documentation and GDS→Python conversion |
+| `doc` | Documentation for `CELL_MODULE` |
 | `test` | The pytest suite |
 | `clean` | Remove `build/` (fixtures and tests survive) |
+| `help` | Usage |
+
+GDS→Python conversion has no target: run `scripts/gds_to_python.py`.
 
 ---
 
@@ -292,7 +303,7 @@ would show up as a second, foreign set of results.
 ## Project structure
 
 ```text
-aion_layout/
+aion_layout_kimi/
 ├── orchestrate.sh              # The loop: prompt, model call, build gate, state, finalise
 ├── pipeline.sh                 # Deterministic steps; `_at` variants take explicit paths
 ├── scripts/
@@ -301,6 +312,8 @@ aion_layout/
 │   ├── report_verification.py  # The grader: always prints exactly one RESULT: line
 │   ├── docker_run.sh           # Container wrapper for sak-drc.sh / sak-lvs.sh
 │   ├── generate_cell.py        # Python generator → GDS
+│   ├── curriculum.py           # Stage 5: the rung ladder derived from the netlist
+│   ├── score_iteration.py, ledger.py, pick_reference_cells.py   # scorer, history, ranker
 │   ├── generate_from_netlist.py, generate_cell_doc.py, gds_to_python.py, gds_to_image.py
 ├── aion_layout/                # Framework package
 │   ├── tech.py                 # SG13G2 layers, design rules, grid, cell defaults
@@ -312,9 +325,10 @@ aion_layout/
 │   ├── spice_parser.py         # SPICE subckt parser
 │   ├── netlist_view.py         # Topology helpers
 │   ├── auto_scaffold.py        # Starter cell from a netlist — deliberately incomplete
+│   ├── layout_metrics.py       # Geometry counts from a GDS
 │   ├── router.py, doc_generator.py, gds_to_python.py
 ├── cells/                      # Hand-written generators: template.py, sg13g2_nand2_1.py
-├── tests/                      # 339 tests + committed fixtures from a real failing run
+├── tests/                      # 368 tests + committed fixtures from a real failing run
 └── build/                      # Run output (gitignored)
 ```
 

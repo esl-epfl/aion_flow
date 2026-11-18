@@ -11,16 +11,16 @@ All generated outputs land under `build/aion_char/` by default.
 
 ## Quick start
 
-Everything runs inside the EDA container — the PDK, cell models, and device models live under `/foss/pdks`.
+Everything runs inside the EDA container — the PDK, cell models, and device models live under `/foss/pdks`. Run from the host, the root `aion-char-*` targets enter the container themselves through `scripts/docker_run.sh` (which expects the checkout mounted at `/foss/designs/aion_flow`); inside the container, set `AION_IN_DOCKER=1`.
 
 ```bash
 # Generate testbenches and run both SV and SPICE simulations
-./scripts/docker_run.sh "make aion-char-all"
+make aion-char-all
 
 # Or one layer at a time
-./scripts/docker_run.sh "make aion-char-generate"   # write tb/
-./scripts/docker_run.sh "make aion-char-sv"         # Verilator + Icarus
-./scripts/docker_run.sh "make aion-char-spice"      # ngspice
+make aion-char-generate   # write tb/
+make aion-char-sv         # Verilator + Icarus
+make aion-char-spice      # ngspice
 ```
 
 ## Available targets
@@ -40,7 +40,7 @@ Everything runs inside the EDA container — the PDK, cell models, and device mo
 | `make aion-char-lib-selfcheck` | Characterize a PDK cell and diff against its own `.lib` |
 | `make aion-char-lib-template` | Print the Liberty template |
 | `make aion-char-cells` | Show the AION cell Verilog path and list available cells |
-| `make aion-char-verify-spice` | Verify a custom SPICE netlist for one cell (`MODULE=...`, `SPICE=...`) |
+| `make aion-char-verify-spice` | Verify a custom SPICE netlist for one cell (`CELL=...`, `SPICE=...`; `MODULE=`/`CUSTOM=` when calling `tools/aion_char/Makefile` directly) |
 | `make aion-char-clean` | Remove all `build/aion_char/` outputs |
 | `make aion-char-clean-tb` | Remove only generated testbenches |
 | `make aion-char-clean-lib` | Remove only generated Liberty libraries |
@@ -70,8 +70,8 @@ Everything runs inside the EDA container — the PDK, cell models, and device mo
 | `LOADS` | 7 values | Output loads for characterization |
 | `JOBS` | `8` | Parallel jobs for characterization |
 | `AREA` | — | Cell area override for `.lib` |
-| `AREA_LEF` | — | LEF file to take the `.lib` area from, as `w*h` of its `SIZE` (`[CELL=]FILE`; used when `AREA` is unset) |
-| `AREA_GDS` | — | GDS file to take the `.lib` area from, as the prBoundary (189/4) bbox (`[CELL=]FILE`; used when neither `AREA` nor `AREA_LEF` is set) |
+| `AREA_LEF` | — | LEF file to take the `.lib` area from, as `w*h` of its `SIZE` (`[CELL=]FILE`; used when `AREA` is unset). `tools/aion_char/Makefile` only: the root Makefile does not forward it |
+| `AREA_GDS` | — | GDS file to take the `.lib` area from, as the prBoundary (189/4) bbox (`[CELL=]FILE`; used when neither `AREA` nor `AREA_LEF` is set). `tools/aion_char/Makefile` only |
 | `DRIVER` / `DRIVER_IN` / `DRIVER_OUT` | — | Optional driver cell for characterization |
 | `VERIFY` | `1` | Set to `0` to skip Liberty verification |
 | `KEEP` | `0` | Set to `1` to keep ngspice decks |
@@ -83,13 +83,13 @@ A bare-transistor AION NAND2 example is provided under `examples/aion_char/`:
 
 ```bash
 # Characterize AION_nand2_11 from the example SPICE netlist
-./scripts/docker_run.sh "make aion-char-lib"
+make aion-char-lib
 ```
 
 Verify a custom SPICE netlist against the generated testbench for a specific cell:
 
 ```bash
-./scripts/docker_run.sh "make aion-char-verify-spice CELL=AION_nand2_11 SPICE=examples/aion_char/aion_nand2_11_flat.spice"
+make aion-char-verify-spice CELL=AION_nand2_11 SPICE=examples/aion_char/aion_nand2_11_flat.spice
 ```
 
 List the cells available in the current netlist:
